@@ -1,0 +1,127 @@
+import os
+import numpy as np
+from ase.io import read, write
+
+
+def Convert_atoms(atom):
+    xx, yy, zz, yz, xz, xy = -atom.calc.results['stress'] * atom.get_volume()
+    atom.info['virial'] = np.array([[xx, xy, xz],
+                                    [xy, yy, yz],
+                                    [xz, yz, zz]])
+    atom.calc.results['energy'] = atom.calc.results['free_energy']
+    del atom.calc.results['stress']
+    del atom.calc.results['free_energy']
+
+
+def check_ediff_converged(outcar_path: str) -> tuple[bool, int]:
+    target_str = "aborting loop because EDIFF is reached"
+    count = 0
+    with open(outcar_path, "r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            if target_str in line:
+                count += 1
+                if count >= 2:
+                    break
+    ok = (count == 1)
+    return ok, count
+
+
+def main():
+    root = "."
+    BUFFER_SIZE = 50    # 缓冲区阈值，攒够50就落盘
+    out_xyz = "train.xyz"
+
+    buffer_atoms = []    # 内存缓冲区，最多存BUFFER_SIZE个atoms
+    total_written = 0    # 累计已经写入xyz的总构型数
+    collected_count = 0  # 当前已收集合格构型计数（屏幕打印用）
+    first_write = True   # 标记是否第一次写文件（覆盖模式）
+
+    success_dirs = []   # 元组 (文件夹名, 自洽计数)
+    skip_dirs = []      # 元组 (文件夹名, 跳过原因)
+
+    entries = os.listdir(root)
+    digit_entries = [e for e in entries if e.isdigit()]
+    digit_entries = sorted(digit_entries, key=lambda x: int(x))
+
+    print("="*60)
+    print(f"[INFO] 工作目录: {os.path.abspath(root)}")
+    print(f"[INFO] 扫描数字命名子文件夹，收集电子自洽标记=1的构型写入xyz")
+    print(f"[INFO] 内存缓冲区大小: {BUFFER_SIZE}")
+    print("="*60)
+
+    def flush_buffer():
+        """把buffer_atoms写入磁盘，然后清空缓冲区释放内存"""
+        nonlocal total_written, first_write
+        if len(buffer_atoms) == 0:
+            return
+        if first_write:
+            write(out_xyz, buffer_atoms, format='extxyz')
+            first_write = False
+        else:
+            write(out_xyz, buffer_atoms, format='extxyz', append=True)
+        cnt = len(buffer_atoms)
+        total_written += cnt
+        buffer_atoms.clear()  # 释放内存
+
+    for entry in digit_entries:
+        dpath = os.path.join(root, entry)
+        if not os.path.isdir(dpath):
+            continue
+
+        outcar = os.path.join(dpath, "OUTCAR")
+        print(f"\n>> 处理文件夹 [{entry}]")
+
+        if not os.path.exists(outcar):
+            print(f"  ⚠️  跳过：未找到OUTCAR")
+            skip_dirs.append((entry, "未找到OUTCAR"))
+            continue
+
+        converged, hit_cnt = check_ediff_converged(outcar)
+        if not converged:
+            if hit_cnt == 0:
+                print(f"  ❌ 跳过：未检测到自洽标记，计算未收敛或计算出错(自洽计数=0)")
+                skip_dirs.append((entry, "未检测到自洽标记，计算未收敛或计算出错，自洽计数=0"))
+            else:
+                print(f"  ❌ 跳过：自洽标记出现 {hit_cnt} 次")
+                skip_dirs.append((entry, f"自洽计数={hit_cnt}"))
+            continue
+
+        try:
+            atoms = read(outcar, format='vasp-out', index=-1)
+            Convert_atoms(atoms)
+            buffer_atoms.append(atoms)
+            success_dirs.append((entry, hit_cnt))
+            collected_count += 1
+            print(f"  ✅ 成功读取，加入缓冲区 (自洽计数={hit_cnt})，缓冲区当前:{len(buffer_atoms)}/{BUFFER_SIZE}")
+            print(f"  ✅ 已收集{collected_count}个结构")
+
+            if len(buffer_atoms) >= BUFFER_SIZE:
+                flush_buffer()
+
+        except Exception:
+            print(f"  ❗ 读取OUTCAR异常，跳过")
+            skip_dirs.append((entry, "读取OUTCAR异常"))
+
+    flush_buffer()
+
+    stat_file = "collect_info.txt"
+    with open(stat_file, "w", encoding="utf-8") as f:
+        f.write(f"扫描到的数字命名文件夹总数: {len(success_dirs)+len(skip_dirs)}\n")
+        f.write(f"✅ 成功收集(自洽标记=1): {len(success_dirs)}\n")
+        f.write(f"❌ 跳过的文件夹总数: {len(skip_dirs)}\n\n")
+
+        f.write("【成功收集文件夹列表】\n")
+        for d, cnt in success_dirs:
+            f.write(f"  [{d}] ：自洽计数={cnt}，已收敛\n")
+
+        f.write("\n【跳过文件夹列表 | 文件夹编号 : 跳过原因】\n")
+        for d, reason in skip_dirs:
+            f.write(f"  [{d}]  :  {reason}\n")
+
+    print(f"\n✅ 输出文件: {out_xyz} ，总共 {total_written} 个合格结构")
+    print(f"📄 统计报告已保存至 {stat_file}")
+    print("="*60)
+
+
+if __name__ == "__main__":
+    main()
