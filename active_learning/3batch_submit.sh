@@ -3,18 +3,29 @@
 # 脚本:        batch_submit.sh
 # 分类:        Slurm批量作业提交脚本
 # 功能:        扫描当前目录下所有数字命名子文件夹，筛选不存在*.log日志的任务目录；
-#              按照最大总任务数MAX_TOTAL_JOBS与每批提交数量BATCH_SIZE控制提交速率，
-#              循环分批sbatch提交sub2.sh，任务满时自动休眠等待。
+#              按数字从小到大顺序逐批sbatch提交sub2.sh；
+#              每次提交前检测目录文件完整性（INCAR、POSCAR、POTCAR、*.sh必需，KPOINTS可选），
+#              不完整则跳过不提交；按照最大总任务数MAX_TOTAL_JOBS与每批提交数量BATCH_SIZE控制提交速率；
+#              动态轮询间隔：队列有空位时每MIN_WAIT_SEC秒快速补位，长期满员时等待时间指数退避翻倍，
+#              最长不超过MAX_WAIT_SEC秒，提交成功后立即重置为最短间隔。
 #              直接执行 ./batch_submit.sh 等价于 nohup ./batch_submit.sh > submit.log 2>&1
 # 使用方法:    ./batch_submit.sh
 # 运行环境：脚本需放在包含众多数字子文件夹的父目录，如，放在a/下，或者b/下
-# 参数:        无参数，直接运行；可修改脚本头部BATCH_SIZE、WAIT_MIN、MAX_TOTAL_JOBS配置
+# 参数:        无参数，直接运行；可修改脚本头部BATCH_SIZE、MAX_TOTAL_JOBS、MIN_WAIT_SEC、MAX_WAIT_SEC配置
 # 输出:
 #   submit.log      【批量脚本日志】batch_submit.sh自身运行日志，父目录仅生成一份
 #   各数字子任务目录生成${JOBID}.log 【子任务日志】由sub2.sh的--output=%j.log生成，每个任务独立一份
 # 作者:        Hongbo Sun
-# 最后修改日期: 2026‑08‑20
+# 最后修改日期: 2026‑08‑22
 # =============================================================================
+
+# ============ 配置区（可按需调整） ============
+BATCH_SIZE=9        # 每批最多提交数量
+MAX_TOTAL_JOBS=18   # 集群上允许的最大总任务数（R+PD 全部算），并行云超算平台上限20个任务
+MIN_WAIT_SEC=60     # 最短轮询间隔（秒）：队列有空位时快速补位，及时抓住空位
+MAX_WAIT_SEC=900    # 最长轮询间隔（秒）：长期满员时指数退避上限（=15分钟）
+# ==============================================
+
 # # 目录树示例:
 # # ============================================================================
 # # .
@@ -59,7 +70,8 @@ if [[ ! "$NOHUP_INNER" == "1" ]];then
     fi
 
     export NOHUP_INNER=1
-    nohup "$0" "$@" > submit.log 2>&1 &
+    # readlink -f 解析绝对路径 + bash 显式调用，避免 $0 不带 ./ 时 nohup 在 PATH 中找不到脚本
+    nohup bash "$(readlink -f "$0")" "$@" > submit.log 2>&1 &
     new_pid=$!
     echo "${new_pid}" > "$LOCK_FILE"
     echo "✅脚本已后台启动，日志输出到 submit.log"
@@ -77,48 +89,47 @@ trap 'rm -f "$LOCK_FILE"' EXIT
 ####################################################
 
 ############## 前置校验：检查目录环境是否正确 ##############
-# 取第一个数字子文件夹作为样例校验
-sample_dir=$(ls -1 [0-9]*/ 2>/dev/null | head -n1)
-if [ -z "${sample_dir}" ];then
+# 仅检查是否存在数字子任务文件夹；各目录文件完整性在提交前逐个检测
+if ! ls -d [0-9]*/ >/dev/null 2>&1; then
     echo "❌ 错误：当前目录未找到数字命名的子任务文件夹！"
     echo "请将 batch_submit.sh 放置在a/、b/这类任务父目录下运行。"
     exit 1
 fi
-
-required_files=("INCAR" "POSCAR" "POTCAR")
-missing_flag=0
-for f in "${required_files[@]}"; do
-    if [ ! -f "${sample_dir}${f}" ];then
-        echo "❌ 样例目录 ${sample_dir} 缺失必要文件：${f}"
-        missing_flag=1
-    fi
-done
-
-if [ ${missing_flag} -eq 1 ];then
-    echo "❗运行路径不正确，请确认各子任务目录已经准备好 INCAR POSCAR POTCAR"
-    exit 1
-fi
-echo "✅ 环境校验通过，任务目录文件齐全"
 ####################################################
 
 # ==========下面是原来全部业务代码============
-BATCH_SIZE=8
-WAIT_MIN=20
-MAX_TOTAL_JOBS=10
+# 检查任务目录文件是否完整：INCAR、POSCAR、POTCAR、*.sh 必需，KPOINTS 可选
+check_files() {
+    local dir="$1"
+    for f in INCAR POSCAR POTCAR; do
+        if [ ! -f "${dir}/${f}" ]; then
+            return 1
+        fi
+    done
+    if ! ls "${dir}"/*.sh >/dev/null 2>&1; then
+        return 1
+    fi
+    return 0
+}
 
 task_list=()
 for dir in [0-9]*/; do
   [ -d "$dir" ] || continue
   # 没有 log 才加入任务列表
   if ! ls "${dir}"*.log >/dev/null 2>&1; then
-    task_list+=("$dir")
+    task_list+=("${dir%/}")
   fi
 done
+
+# 按数字从小到大排序（1、2、3、…、100），确保按文件夹顺序提交
+task_list=($(printf '%s\n' "${task_list[@]}" | sort -n))
 
 total=${#task_list[@]}
 echo "无 log、待提交目录总数：$total"
 
 index=0
+first_batch=1   # 首次提交标记：第一轮允许按 MAX_TOTAL_JOBS 全量提交（不受 BATCH_SIZE 限制）
+wait_seconds=$MIN_WAIT_SEC   # 当前轮询间隔（秒）：满员时指数退避，有空位时重置为最短间隔
 
 while [ $index -lt $total ]; do
   echo
@@ -131,31 +142,52 @@ while [ $index -lt $total ]; do
   echo "当前总任务数：$total_jobs / $MAX_TOTAL_JOBS"
 
   if [ "$total_jobs" -ge "$MAX_TOTAL_JOBS" ]; then
-    echo "任务已满，等待 $WAIT_MIN 分钟..."
-    sleep 1200
+    echo "任务已满，等待 ${wait_seconds} 秒后重试..."
+    sleep $wait_seconds
+    # 指数退避：满员时等待时间翻倍，最长不超过 MAX_WAIT_SEC
+    wait_seconds=$((wait_seconds * 2))
+    if [ "$wait_seconds" -gt "$MAX_WAIT_SEC" ]; then
+      wait_seconds=$MAX_WAIT_SEC
+    fi
     continue
   fi
 
   # 本轮可提交数量
   can_submit=$((MAX_TOTAL_JOBS - total_jobs))
-  if [ "$can_submit" -gt "$BATCH_SIZE" ]; then
+  # 首次提交不受 BATCH_SIZE 限制，按剩余额度全量提交；后续轮次每轮最多 BATCH_SIZE 个
+  if [ "$first_batch" -eq 0 ] && [ "$can_submit" -gt "$BATCH_SIZE" ]; then
     can_submit=$BATCH_SIZE
   fi
+
+  # 队列有空位：重置为最短间隔，及时抓住陆续出现的空位
+  wait_seconds=$MIN_WAIT_SEC
 
   echo "本轮最多可提交：$can_submit"
   submitted=0
 
   while [ $submitted -lt $can_submit ] && [ $index -lt $total ]; do
     dir="${task_list[$index]}"
+    index=$((index + 1))
+
+    # 提交前检测文件完整性，不完整则跳过
+    if ! check_files "$dir"; then
+      echo "⚠️ 跳过：${dir} 文件不完整（需要 INCAR、POSCAR、POTCAR、*.sh，KPOINTS 可选）"
+      continue
+    fi
+
     echo "提交：$dir"
     (cd "$dir" && sbatch sub2.sh)
     submitted=$((submitted + 1))
-    index=$((index + 1))
     sleep 1
   done
 
-  echo "本轮提交：$submitted 个，等待 $WAIT_MIN 分钟..."
-  sleep 1200
+  # 本轮有实际提交则取消首轮标记，后续轮次严格限流
+  if [ "$submitted" -gt 0 ]; then
+    first_batch=0
+  fi
+
+  echo "本轮提交：$submitted 个，等待 ${wait_seconds} 秒后再次检查..."
+  sleep $wait_seconds
 done
 
 echo "所有无 log 目录提交完成！"
