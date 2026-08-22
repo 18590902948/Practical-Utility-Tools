@@ -1,6 +1,0 @@
-for d in {a..z}; do [ -d "$d" ] && cp scf_collect.py batch_submit.sh "$d/"; done
-
-
-或者
-
-cp -v scf_collect.py batch_submit.sh [a-z]/
