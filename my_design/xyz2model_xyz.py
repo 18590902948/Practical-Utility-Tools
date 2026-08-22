@@ -38,10 +38,10 @@ Citation: Z. Yan et al., GPUMDkit: A User-Friendly Toolkit for GPUMD and NEP,
   然后按以下规则判断是否重复:
     - 有记录且文件夹与 model.xyz 都存在 → 跳过，不再重复生成;
     - 文件夹或 model.xyz 缺失 (例如被手动删除) → 重新生成。
-  该规则同时适用于固定抽帧与随机抽帧模式 (随机模式中，
-  已记录且输出完整的帧会从随机池中排除)。
+  该规则同时适用于三种模式 (随机模式中，已记录且输出完整的帧会从
+  随机池中排除; 全帧模式中已抽取过的帧会被跳过)。
 
-两种模式:
+三种模式:
   1) 固定抽帧 (默认)
      python xyz2model_xyz.py 输入xyz文件名 帧号 [帧号 ...]
      显式指定一个或多个 OVITO 帧号，重复帧号会忽略并给出警告。
@@ -49,6 +49,9 @@ Citation: Z. Yan et al., GPUMDkit: A User-Friendly Toolkit for GPUMD and NEP,
      python xyz2model_xyz.py 输入xyz文件名 random <n>
      随机抽取 <n> 个不重复的帧。未设置随机种子，每次运行结果不同;
      抽中的帧号会打印出来，便于记录复现。
+  3) 全帧抽取
+     python xyz2model_xyz.py 输入xyz文件名 all
+     将输入文件中的所有帧全部抽取，每帧一个文件夹 (帧号命名)。
 
 选项:
   -o, --outdir DIR   输出根目录 (默认: 脚本所在目录即当前运行目录;
@@ -71,8 +74,11 @@ Citation: Z. Yan et al., GPUMDkit: A User-Friendly Toolkit for GPUMD and NEP,
 
   python xyz2model_xyz.py test.xyz random 3 -o /some/dir
       # 输出到 /some/dir/3/model.xyz 等 (-o 支持相对/绝对路径)
+
+  python xyz2model_xyz.py test.xyz all
+      # 抽取全部帧，例如 -> 0/model.xyz, 1/model.xyz, ..., 99/model.xyz
 ===================================================================================
-去重 (两种模式通用):
+去重 (三种模式通用):
   重复运行同一命令时，txt 中已记录且文件夹与 model.xyz 都存在的帧会被跳过:
     python xyz2model_xyz.py test.xyz 5 9 66
     python xyz2model_xyz.py test.xyz 5 9 66   # 第二次运行: 三帧全部跳过
@@ -306,7 +312,27 @@ def main():
         print(f"未指定输出根目录，使用脚本所在目录: {os.path.abspath(outdir)}")
     os.makedirs(outdir, exist_ok=True)
 
-    if rest[0] == "random":
+    if rest[0] == "all":
+        # 全帧模式: python xyz2model_xyz.py 输入xyz文件名 all
+        if len(rest) != 1:
+            print("用法: python xyz2model_xyz.py 输入xyz文件名 all")
+            sys.exit(1)
+        # 排除已记录且输出完整的帧 (文件夹与 model.xyz 均存在)
+        to_extract = [i for i in range(nframes)
+                      if frame_available(i, recorded, outdir)]
+        skipped = [i for i in range(nframes)
+                   if not frame_available(i, recorded, outdir)]
+        if skipped:
+            print(f"已排除 {len(skipped)} 个抽取过的帧 "
+                  f"(有记录且输出完整): {skipped}")
+        if not to_extract:
+            print("无需抽取 (所有帧都已抽取过)。")
+        else:
+            print(f"开始抽取全部 {len(to_extract)} 帧 (共 {nframes} 帧):")
+            for idx in to_extract:
+                extract_and_save(frames, idx, outdir)
+            append_record(frames, to_extract, outdir, recorded)
+    elif rest[0] == "random":
         # 随机模式: python xyz2model_xyz.py 输入xyz文件名 random <n>
         if len(rest) != 2:
             print("用法: python xyz2model_xyz.py 输入xyz文件名 random <n>")
@@ -347,7 +373,8 @@ def main():
             if not token.isdigit():
                 print(f"错误: '{token}' 不是有效的帧号。"
                       "用法: python xyz2model_xyz.py 输入xyz文件名 [帧号 ...] "
-                      "或 python xyz2model_xyz.py 输入xyz文件名 random <n>")
+                      "或 python xyz2model_xyz.py 输入xyz文件名 random <n> "
+                      "或 python xyz2model_xyz.py 输入xyz文件名 all")
                 sys.exit(1)
             idx = int(token)
             if idx in seen:
