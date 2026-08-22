@@ -5,7 +5,7 @@
              1) 不传参数：自动扫描脚本所在目录下的所有 xyz/extxyz 文件，按文件名排序合并；
              2) 传参数：按命令行参数指定的文件顺序合并（参数为已存在文件时
                 直接使用，否则相对脚本所在目录解析）。
-             终端展示检测结果（第一列文件名，第二列格式，格式列右对齐）；
+             终端展示检测结果（文件名、格式、帧数三列，格式与帧数右对齐）；
              将相同格式的文件分别合并
 使用方法:    python xyzs2xyz_file.py
              python xyzs2xyz_file.py 文件1.xyz 文件2.xyz
@@ -13,10 +13,12 @@
 运行位置:    脚本所在目录
 输出:        merged.xyz（所有 xyz 文件合并）
              merged.extxyz（所有 extxyz 文件合并）
+             merged.txt（合并记录日志，多次运行追加不覆盖）
 =============================================================================
 """
 import os
 import sys
+import time
 
 
 def collect_files(folder):
@@ -31,6 +33,21 @@ def collect_files(folder):
         elif name.endswith(".xyz"):
             xyz_files.append(full)
     return xyz_files, extxyz_files
+
+
+def count_frames(f):
+    """统计 xyz/extxyz 文件中的帧数（每帧首行第一列为正整数原子数）"""
+    n = 0
+    with open(f, "r") as fin:
+        for line in fin:
+            parts = line.split()
+            if parts:
+                try:
+                    if int(parts[0]) > 0:
+                        n += 1
+                except ValueError:
+                    pass
+    return n
 
 
 def resolve_files(script_dir, args):
@@ -80,30 +97,50 @@ def main():
         print("未找到任何 xyz/extxyz 文件！")
         return
 
-    # 按格式分组（保持文件顺序）
+    # 按格式分组（保持文件顺序），并统计各文件帧数
     groups = {"xyz": [], "extxyz": []}   # 格式 -> 文件路径列表
+    table = []                            # (文件名, 格式, 帧数)，用于终端展示
     for f in files:
         if f.endswith(".extxyz"):
             groups["extxyz"].append(f)
+            fmt = "extxyz"
         else:
             groups["xyz"].append(f)
+            fmt = "xyz"
+        table.append((os.path.basename(f), fmt, count_frames(f)))
 
-    # 终端展示: 第一列文件名，第二列格式（右对齐）
+    # 终端展示: 文件名、格式、帧数三列（表头与数据均右对齐）
     print("\n检测到 xyz/extxyz 文件:")
-    print(f"  {'文件名':<22}{'格式':>8}")
-    for f in files:
-        fmt = "extxyz" if f.endswith(".extxyz") else "xyz"
-        print(f"  {os.path.basename(f):<22}{fmt:>8}")
+    print(f"  {'文件名':>22}{'格式':>8}{'帧数':>10}")
+    for name, fmt, n in table:
+        print(f"  {name:>22}{fmt:>8}{n:>10}")
 
     # 按格式分别合并
+    output_lines = []                     # 输出文件记录（写入 merged.txt）
     for fmt in ("xyz", "extxyz"):
         f_list = groups[fmt]
         if not f_list:
             continue
         out_file = os.path.join(script_dir, f"merged.{fmt}")
+        total = sum(count_frames(f) for f in f_list)
         print(f"\n合并 {len(f_list)} 个 .{fmt} 文件 -> {out_file}")
         merge_files(f_list, out_file)
-        print(f"输出文件: {os.path.abspath(out_file)}")
+        print(f"输出文件: {os.path.abspath(out_file)}（总 {total} 帧）")
+        output_lines.append(f"{os.path.basename(out_file)} | {fmt} | 总 {total} 帧")
+
+    # 追加写入合并记录日志（多次运行不覆盖历史记录）
+    if output_lines:
+        with open(os.path.join(script_dir, "merged.txt"), "a") as fout:
+            fout.write("=" * 40 + "\n")
+            fout.write(f"合并时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            fout.write(f"输入文件 ({len(table)} 个):\n")
+            for name, fmt, n in table:
+                fout.write(f"  {name} | {fmt} | {n} 帧\n")
+            fout.write("输出文件:\n")
+            for line in output_lines:
+                fout.write(f"  {line}\n")
+            fout.write("=" * 40 + "\n")
+        print(f"合并记录已追加: {os.path.join(script_dir, 'merged.txt')}")
 
     print("\n全部合并完成！")
 
