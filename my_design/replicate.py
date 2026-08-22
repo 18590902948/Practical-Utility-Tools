@@ -31,6 +31,12 @@ from ase import Atoms
 # ============================== 配置区 =====================================
 DEFAULT_SUFFIX = "_super"   # 单帧输入默认输出后缀（输出为 输入名_super.xyz）
 FRAME_TAG = "_frame"        # 多帧输入输出文件名标签（输出为 输入名_frameN.xyz）
+DIFF_TOLERANCE = 2.0        # 目标原子数模式：候选偏差容忍倍率（>=1）
+                            # 偏差不超过 最小偏差*该值 的候选才参与正方体评选，
+                            # 值越大越偏向正方体（可能牺牲原子数接近度）
+MIN_DIFF_RATIO = 0.03       # 候选偏差保底下限：目标原子数的比例（默认 3%）
+                            # 即使最小偏差为 0（完美匹配），也允许偏差 <= 目标*该值
+                            # 的候选参与正方体评选，避免为了精确原子数选到扁盒子
 # ===========================================================================
 
 # 可自动识别为结构的文件名/扩展名（用于无参数自动扫描）
@@ -39,10 +45,12 @@ STRUCT_EXTS = (".xyz", ".extxyz", ".vasp")
 
 
 def find_nearest_supercell(atoms, target):
-    """搜索最接近目标原子数的超胞倍数 (a, b, c)。
+    """搜索最接近目标原子数的超胞倍数 (a, b, c)，并尽量使扩胞后盒子接近正方体。
 
-    优先在目标原子数 ±10% 范围内选边长最均衡的候选；
-    无候选时退化为按原子数差值最小、其次边长均衡度选择。
+    评选规则:
+      1. 计算所有倍数组合的原子数偏差，取最小偏差 best_diff（最近的超胞）；
+      2. 偏差不超过 best_diff * DIFF_TOLERANCE 的候选进入评选（容忍范围）；
+      3. 入选者按扩胞后盒边长比（最长/最短，越接近 1 越正方）排序，最优者胜出。
     """
     n_atoms = len(atoms)
     if target < n_atoms:
@@ -53,41 +61,35 @@ def find_nearest_supercell(atoms, target):
     ratio = (target / n_atoms) ** (1 / 3)
     max_mult = max(1, int(math.ceil(ratio * 5)))
 
-    candidates = [(a, b, c) for a in range(1, max_mult + 1)
-                  for b in range(1, max_mult + 1)
-                  for c in range(1, max_mult + 1)]
+    # 收集全部候选: (a, b, c, 原子数偏差, 原子数, 盒边长比)
+    candidates = []
+    for a in range(1, max_mult + 1):
+        for b in range(1, max_mult + 1):
+            for c in range(1, max_mult + 1):
+                n_new = n_atoms * a * b * c
+                diff = abs(n_new - target)
+                lengths = (cell[0] * a, cell[1] * b, cell[2] * c)
+                shape = max(lengths) / min(lengths)  # 边长比，1 = 正方体
+                candidates.append((a, b, c, diff, n_new, shape))
 
-    diff_threshold = 0.1 * target
+    best_diff = min(c[3] for c in candidates)
+    # 候选偏差上限：最小偏差 * 容忍倍率，但至少允许 目标原子数*MIN_DIFF_RATIO 的偏差
+    diff_limit = max(best_diff * DIFF_TOLERANCE, target * MIN_DIFF_RATIO)
+    # 偏差在 diff_limit 内的候选进入正方体评选
+    feasible = [c for c in candidates if c[3] <= diff_limit]
+    feasible.sort(key=lambda c: (c[5], c[3]))  # 边长比优先，其次偏差
+    best = feasible[0]
 
-    filtered = []
-    for a, b, c in candidates:
-        atoms_num = n_atoms * a * b * c
-        diff = abs(atoms_num - target)
-        if diff <= diff_threshold:
-            new_lengths = (cell[0] * a, cell[1] * b, cell[2] * c)
-            spread = np.std(new_lengths)
-            filtered.append((a, b, c, diff, spread))
-
-    if not filtered:
-        # 无候选：按差值优先、边长均衡度次之
-        best = None
-        best_diff = float("inf")
-        best_spread = float("inf")
-        for a, b, c in candidates:
-            atoms_num = n_atoms * a * b * c
-            diff = abs(atoms_num - target)
-            if diff > best_diff:
-                break
-            new_lengths = (cell[0] * a, cell[1] * b, cell[2] * c)
-            spread = np.std(new_lengths)
-            if (diff < best_diff) or (diff == best_diff and spread < best_spread):
-                best_diff = diff
-                best_spread = spread
-                best = (a, b, c)
-        return best
-
-    filtered.sort(key=lambda x: x[4])  # 边长均衡度优先
-    return filtered[0][:3]
+    # 终端展示评选过程（按偏差排序、偏差相同时按边长比排序的前 8 个候选）
+    print(f"  候选评选（按原子数偏差排序，"
+          f"偏差 <= {diff_limit:.0f} 参与正方体评选）:")
+    print(f"    {'倍数':<10}{'原子数':>8}{'偏差':>8}{'边长比':>10}")
+    for a, b, c, diff, n_new, shape in sorted(candidates, key=lambda x: (x[3], x[5]))[:8]:
+        mark = "  <- 选中" if (a, b, c) == best[:3] else ""
+        print(f"    {f'{a}x{b}x{c}':<10}{n_new:>8}{diff:>8}{shape:>10.2f}{mark}")
+    print(f"  选中: {best[0]}x{best[1]}x{best[2]}（{best[4]} 原子, 偏差 {best[3]}, "
+          f"边长比 {best[5]:.2f}）")
+    return best[0], best[1], best[2]
 
 
 def read_frames(infile):
