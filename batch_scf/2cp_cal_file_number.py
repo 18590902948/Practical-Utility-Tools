@@ -4,8 +4,8 @@
 分类:        文件批量处理脚本
 功能:        遍历脚本所在目录下所有数字命名的子文件夹（1/、2/、…、n/），
              将Y_VASP_file目录下的INCAR、POTCAR、*.sh任务提交脚本批量复制到
-             各子任务目录；自动检测源文件是否齐全（缺失INCAR时自动创建默认INCAR），
-             并校验POTCAR与POSCAR的元素顺序是否一致。
+             各子任务目录；自动检测源文件是否齐全（缺失INCAR或任务提交脚本时
+             自动创建默认文件），并校验POTCAR与POSCAR的元素顺序是否一致。
 使用方法:    python 2cp_cal_file_number.py
 参数:        无参数，依赖脚本所在目录下的Y_VASP_file源目录及数字文件夹结构
 输出:
@@ -76,6 +76,33 @@ NELM   =  150          (Maximum SCF steps)
 NCORE = 2
 """
 
+# 默认任务提交脚本模板：Y_VASP_file下不存在*.sh时自动创建，如需自定义请直接修改此模板。
+# 注意：脚本写入时强制LF换行（\n）、UTF-8无BOM编码，符合Linux作业提交格式要求。
+DEFAULT_SUB_SH = """#!/bin/bash
+#SBATCH --partition=v6_384  
+#SBATCH --nodes=1        
+#SBATCH --ntasks=24        
+#SBATCH --output=%j.log     
+
+#======================================================================
+source /public5/soft/modules/module.sh  
+module load mpi/oneAPI/2022.1  
+export PATH=/public5/home/t6s008728/software-t6s008728/vasp.6.3.0/bin:$PATH
+echo
+echo
+echo "=== VASP 版本检查 ==="
+which vasp_std
+vasp_std --version 2>&1 | grep -i version  
+echo
+echo
+echo "=== 输入文件检查 ==="
+ls -l INCAR KPOINTS POSCAR POTCAR  
+echo
+echo
+#======================================================================
+mpirun -np 24 vasp_std  
+"""
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SOURCE_DIR = os.path.join(SCRIPT_DIR, "Y_VASP_file")
 
@@ -138,15 +165,18 @@ def main():
     # 3. 检查 POTCAR 与 *.sh 任务提交脚本
     potcar_path = os.path.join(SOURCE_DIR, "POTCAR")
     sh_files = sorted(glob.glob(os.path.join(SOURCE_DIR, "*.sh")))
-    missing = []
     if not os.path.exists(potcar_path):
-        missing.append("POTCAR")
-    if len(sh_files) == 0:
-        missing.append("任务提交脚本（*.sh，如 sub2.sh）")
-    if missing:
-        print(f"❌ 源目录 Y_VASP_file 缺少以下必需文件：{'、'.join(missing)}")
-        print("   请补齐上述文件后重新运行本脚本。")
+        print(f"❌ 源目录 Y_VASP_file 缺少必需文件：POTCAR")
+        print("   请补齐 POTCAR 后重新运行本脚本。")
         exit(1)
+    if len(sh_files) == 0:
+        # 缺失任务提交脚本时自动创建默认脚本（LF换行、UTF-8无BOM，符合Linux提交格式）
+        default_sh_path = os.path.join(SOURCE_DIR, "sub2.sh")
+        with open(default_sh_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(DEFAULT_SUB_SH)
+        print(f"⚠️  未检测到任务提交脚本（*.sh），已自动创建默认脚本：{default_sh_path}")
+        print("    该默认脚本为 Slurm 模板（v6_384 分区、24 核），如需自定义请编辑该文件后重新运行本脚本。")
+        sh_files = [default_sh_path]
 
     # 4. 收集子任务文件夹并校验元素顺序
     folders = find_task_folders()
@@ -172,6 +202,13 @@ def main():
         incar_content = f.read()
     if incar_content.strip().replace("\r\n", "\n") == DEFAULT_INCAR.strip():
         print("ℹ️  本次使用的 INCAR 为默认 INCAR（未自定义）。如需自定义，请编辑 Y_VASP_file/INCAR 后重新运行本脚本。")
+
+    # 检测任务提交脚本是否为默认脚本（比较时忽略换行符差异）
+    for s in sh_files:
+        with open(s, "r", encoding="utf-8") as f:
+            sh_content = f.read()
+        if sh_content.strip().replace("\r\n", "\n") == DEFAULT_SUB_SH.strip():
+            print(f"ℹ️  本次使用的 {os.path.basename(s)} 为默认任务提交脚本（未自定义）。如需自定义，请编辑 Y_VASP_file/{os.path.basename(s)} 后重新运行本脚本。")
 
     # 6. 批量复制 INCAR、POTCAR、*.sh 到所有子任务文件夹
     copy_items = ["INCAR", "POTCAR"] + [os.path.basename(s) for s in sh_files]
