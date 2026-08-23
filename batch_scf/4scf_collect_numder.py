@@ -5,14 +5,15 @@
 功能:        扫描当前目录下所有数字命名的子文件夹，读取各文件夹中的OUTCAR；
              检测电子自洽收敛标记（EDIFF reached，出现且仅出现1次）判断计算是否收敛；
              提取收敛结构的能量与virial，以extxyz格式写入train.xyz（供NEP/MTP等势训练）；
-             内存缓冲达到50个结构时批量落盘，最终生成收集统计报告。
+             内存缓冲达到50个结构时批量落盘，最终生成收集统计报告，并在终端末尾
+             打印未收集文件夹列表及原因。
 使用方法:    python scf_collect_numder.py
 参数:        无参数，自动扫描当前工作目录下数字命名的子文件夹
 输出:
   train.xyz          收集的合格结构（extxyz格式，含energy、virial信息）
   collect_info.txt   收集统计报告（成功/跳过文件夹列表及原因）
 作者:        Hongbo Sun
-最后修改日期: 2026‑08‑21
+最后修改日期: 2026‑08‑23
 =============================================================================
 # 目录树示例:
 # ============================================================================
@@ -53,6 +54,36 @@ def check_ediff_converged(outcar_path: str) -> tuple[bool, int]:
                     break
     ok = (count == 1)
     return ok, count
+
+
+def dw(s):
+    """字符串显示宽度：中文等宽字符按2列计，用于终端对齐。"""
+    return sum(2 if ord(c) > 127 else 1 for c in str(s))
+
+
+def pad(s, w, align="<"):
+    """按显示宽度填充空格对齐: '<'左对齐, '>'右对齐。"""
+    s = str(s)
+    n = w - dw(s)
+    return s + " " * n if align == "<" else " " * n + s
+
+
+def col(s, w, align="<"):
+    """单列: 按宽度对齐 + 列间2空格分隔。"""
+    return pad(s, w, align) + "  "
+
+
+def skip_status(reason):
+    """跳过原因 -> 简短状态标签 (终端列表用)。"""
+    if "未找到OUTCAR" in reason:
+        return "缺少OUTCAR"
+    if "未检测到" in reason or "自洽计数=0" in reason:
+        return "未收敛"
+    if "自洽计数" in reason:
+        return "自洽异常"
+    if "异常" in reason:
+        return "读取异常"
+    return "其他"
 
 
 def main():
@@ -149,7 +180,29 @@ def main():
 
     print(f"\n✅ 输出文件: {out_xyz} ，总共 {total_written} 个合格结构")
     print(f"📄 统计报告已保存至 {stat_file}")
-    print("="*60)
+
+    # 终端末尾打印未收集文件夹列表（含原因），与 collect_info.txt 内容对应
+    bar = "=" * 60
+    line = "-" * 60
+    print(bar)
+    if skip_dirs:
+        print(f"📊 未收集文件夹列表 (共 {len(skip_dirs)} 个):")
+        print(line)
+        hdr = col("序号", 6, ">") + col("文件夹", 8, ">") + col("状态", 10) + "原因"
+        sep = (col("-" * 6, 6, ">") + col("-" * 8, 8, ">")
+               + col("-" * 10, 10) + "-" * 30)
+        print(hdr)
+        print(sep)
+        for i, (d, reason) in enumerate(skip_dirs, 1):
+            print(col(i, 6, ">") + col(d, 8, ">")
+                  + col(skip_status(reason), 10) + reason)
+        print(sep)
+        total = len(success_dirs) + len(skip_dirs)
+        print(f"✅ 成功收集 {len(success_dirs)}/{total}，"
+              f"未收集 {len(skip_dirs)} 个，详情见 collect_info.txt")
+    else:
+        print("📊 未收集文件夹列表: 0 个，全部收集成功 🎉")
+    print(bar)
 
 
 if __name__ == "__main__":
