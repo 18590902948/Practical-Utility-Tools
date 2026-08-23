@@ -10,14 +10,16 @@
 参数:        输入文件 ...   待合并的 xyz/extxyz 文件 (命令行相对当前运行
                            目录解析；不传时用配置区 INPUT_FILES，支持
                            通配符；配置区为空则自动扫描脚本目录)
-             -o/--output   输出文件路径 (如 C/c.xyz；优先于配置区
-                           OUTPUT_FILES；扩展名决定合并格式，仅合并同格式
-                           输入，其他格式跳过)
+             -o/--output   输出路径 (两种形式: 以 .xyz/.extxyz 结尾视为
+                           输出文件完整路径，如 -o C/c.xyz，扩展名决定
+                           合并格式；否则视为输出目录，如 -o .，文件名
+                           用配置区 OUTPUT_FILES；默认输出到脚本所在
+                           目录 OUTPUT_PATH)
              -h/--help     显示本帮助
 输入文件:    配置区 INPUT_FILES (默认 *.xyz *.extxyz，相对 INPUT_PATH)
 输出文件:    配置区 OUTPUT_FILES (默认 merged.xyz / merged.extxyz，相对
            OUTPUT_PATH)
-输出路径:    默认脚本所在目录 (OUTPUT_PATH)，可用 -o 指定 (相对/绝对路径均可)
+输出路径:    默认脚本所在目录 (OUTPUT_PATH)，可用 -o 指定 (输出文件或输出目录，相对/绝对路径均可)
 示例:
   python xyzs2xyz_file.py
   python xyzs2xyz_file.py a.xyz b.xyz
@@ -107,7 +109,7 @@ def expand_patterns(patterns, base_dir, keep_unmatched=True):
             else:
                 print(f"⚠️ 警告: 模式 '{p}' 未匹配任何文件，已忽略。")
         else:
-            files.append(os.path.join(base_dir, p))
+            files.append(os.path.normpath(os.path.join(base_dir, p)))
     return files
 
 
@@ -236,11 +238,19 @@ def main():
     # 输出文件: -o 命令行优先，否则配置区 OUTPUT_FILES (相对 OUTPUT_PATH)
     outputs_by_fmt = {}  # 格式 -> 输出文件路径
     if out_file:
-        out_format = os.path.splitext(out_file)[1].lower().lstrip(".")
-        if out_format not in ("xyz", "extxyz"):
-            print("❌ 错误: -o 输出文件扩展名必须是 .xyz 或 .extxyz。")
-            sys.exit(1)
-        outputs_by_fmt[out_format] = out_file
+        ext = os.path.splitext(out_file)[1].lower().lstrip(".")
+        if ext in ("xyz", "extxyz"):
+            # -o 为输出文件完整路径: 扩展名决定合并格式
+            outputs_by_fmt[ext] = out_file
+        else:
+            # -o 为输出目录: 文件名用配置区 OUTPUT_FILES 对应格式
+            for f in expand_patterns(OUTPUT_FILES, out_file):
+                fmt = os.path.splitext(f)[1].lower().lstrip(".")
+                if fmt in ("xyz", "extxyz"):
+                    outputs_by_fmt[fmt] = f
+            if not outputs_by_fmt:
+                print("❌ 错误: 配置区 OUTPUT_FILES 中没有 .xyz/.extxyz 文件名。")
+                sys.exit(1)
     else:
         output_base = os.path.normpath(os.path.join(script_dir, OUTPUT_PATH))
         for f in expand_patterns(OUTPUT_FILES, output_base):
