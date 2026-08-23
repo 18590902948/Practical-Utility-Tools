@@ -1,6 +1,6 @@
 """
 =============================================================================
-脚本:        1xyz2poscar_number.py
+脚本:        1xyz2poscar_number_loose.py（宽松临时版）
 分类:        格式转换脚本
 功能:        读取XYZ轨迹文件，将轨迹每一帧拆分为独立POSCAR文件；
              每帧放入以帧号命名的数字文件夹（1/、2/、…、n/）中；
@@ -8,6 +8,9 @@
              - 默认模式(-def)：全新分发，从 1/ 开始创建数字文件夹；
              - 续算模式(-con)：在已有数字文件夹基础上继续分发，
                新轨迹帧从当前最大文件夹号+1开始（补充数据单点能计算）；
+             与正式版差异：续算模式找不到元素顺序记录文件(.elements_order.txt)时
+             不终止，改为从最大文件夹的已有POSCAR自动推断元素顺序（临时应急用，
+             处理旧版脚本生成的数据目录，用后即弃）
              所有帧按全局统一的元素顺序排列（第6行元素顺序一致，第7行计数与第6行一一对应）；
              输出POSCAR使用direct直接坐标。
 使用方法:    python 1xyz2poscar_number.py [-def | -con] [xyz文件名]
@@ -163,16 +166,27 @@ if mode == "continue":
             exit(1)
 
     # 读取上次运行记录的元素顺序，保证新旧POSCAR第6行一致
-    if not os.path.isfile(elem_order_file):
-        print(f"❌ 未找到元素顺序记录文件：{elem_order_file}")
-        print("   该文件由默认模式自动生成，删除后无法保证元素顺序一致，终止运行！")
-        exit(1)
-    with open(elem_order_file, encoding="utf-8") as f:
-        elements = f.read().strip().split()
-    if not elements:
-        print(f"❌ 元素顺序记录文件为空：{elem_order_file}")
-        exit(1)
-    print(f"✅ 沿用上次元素顺序：{' '.join(elements)}")
+    # 【宽松版】记录文件缺失时不终止，改为从最大文件夹的已有POSCAR推断元素顺序
+    if os.path.isfile(elem_order_file):
+        with open(elem_order_file, encoding="utf-8") as f:
+            elements = f.read().strip().split()
+        if not elements:
+            print(f"❌ 元素顺序记录文件为空：{elem_order_file}")
+            exit(1)
+        print(f"✅ 沿用上次元素顺序：{' '.join(elements)}")
+    else:
+        print(f"⚠️ 未找到元素顺序记录文件（宽松模式），从已有POSCAR推断元素顺序")
+        try:
+            old_atoms = read(os.path.join(script_dir, str(max_num), "POSCAR"), format='vasp')
+            elements = []
+            for sym in old_atoms.get_chemical_symbols():
+                if sym not in elements:
+                    elements.append(sym)
+            print(f"✅ 从 {max_num}/POSCAR 推断元素顺序：{' '.join(elements)}")
+        except Exception as e:
+            print(f"⚠️ 从已有POSCAR推断元素顺序失败（{e}），改用新轨迹元素字母排序")
+            elements = sorted({sym for a in frames for sym in a.get_chemical_symbols()})
+            print(f"✅ 新轨迹元素顺序：{' '.join(elements)}")
 
     # 新轨迹出现记录文件之外的元素 → 元素顺序会漂移，终止
     new_elements = {sym for a in frames for sym in a.get_chemical_symbols()}
