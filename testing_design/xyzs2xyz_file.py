@@ -7,23 +7,32 @@
              指定输入（支持通配符），按格式分组合并，支持跨路径输入与
              -o 指定输出文件，并统计帧数、记录合并日志。
 使用方法:    python xyzs2xyz_file.py [输入文件 ...] [-o 输出文件]
-参数:        输入文件 ...   待合并的 xyz/extxyz 文件 (命令行相对当前运行
-                           目录解析；不传时用配置区 INPUT_FILES，支持
-                           通配符；配置区为空则自动扫描脚本目录)
+参数:        输入文件 ...   待合并的 xyz/extxyz 文件 (可选 -t/--target 标记，
+                           不输入也行；命令行相对当前运行目录解析；不传时
+                           用配置区 INPUT_FILES，支持通配符；配置区为空
+                           则自动扫描脚本目录)
+             -t/--target   输入文件标记 (可选，不输入也行，仅用于明确声明；
+                           位置参数一律视为输入文件)
              -o/--output   输出路径 (两种形式: 以 .xyz/.extxyz 结尾视为
-                           输出文件完整路径，如 -o C/c.xyz，扩展名决定
-                           合并格式；否则视为输出目录，如 -o .，文件名
-                           用配置区 OUTPUT_FILES；默认输出到脚本所在
-                           目录 OUTPUT_PATH)
+                           输出文件完整路径，如 -o ./C/c.xyz，扩展名决定
+                           合并格式；否则视为输出目录 (靶文件夹)，如
+                           -o .，文件名用配置区 OUTPUT_FILES；不指定时
+                           输出到默认目录 OUTPUT_PATH；不带点开头的相对
+                           路径默认相对脚本所在目录解析，./ 或 ../ 开头
+                           相对当前运行目录)
              -h/--help     显示本帮助
 输入文件:    配置区 INPUT_FILES (默认 *.xyz *.extxyz，相对 INPUT_PATH)
 输出文件:    配置区 OUTPUT_FILES (默认 merged.xyz / merged.extxyz，相对
            OUTPUT_PATH)
-输出路径:    默认脚本所在目录 (OUTPUT_PATH)，可用 -o 指定 (输出文件或输出目录，相对/绝对路径均可)
+输出路径:    默认脚本所在目录下的 merge/ (OUTPUT_PATH)，可用 -o 指定
+           (输出文件或输出目录，相对/绝对路径均可)；合并记录 merged.txt
+           位于输出目录
 示例:
   python xyzs2xyz_file.py
-  python xyzs2xyz_file.py a.xyz b.xyz
-  python xyzs2xyz_file.py A/a.xyz B/b.xyz -o C/c.xyz
+  python xyzs2xyz_file.py ./a.xyz ./b.xyz
+  python xyzs2xyz_file.py -t ./a.xyz ./b.xyz -o ./C/c.xyz
+  python xyzs2xyz_file.py './A/*.xyz' -o ./C/c.xyz
+  python xyzs2xyz_file.py ./A/a.xyz ./B/b.xyz -o ./C/c.xyz
 作者:        Hongbo Sun
 最后修改:    2026-08-24
 =============================================================================
@@ -37,9 +46,9 @@ import time
 # ============================== 参数配置区 =====================================
 INPUT_FILES  = ["*.xyz", "*.extxyz"]          # 输入文件列表 (支持通配符，相对 INPUT_PATH 展开；命令行参数优先)
 OUTPUT_FILES = ["merged.xyz", "merged.extxyz"]  # 输出文件列表 (按输入实际格式生成对应扩展名的输出；-o 命令行优先)
-RECORD_FILE  = "merged.txt"                   # 合并记录文件 (追加写入，不覆盖历史，脚本所在目录)
+RECORD_FILE  = "merged.txt"                   # 合并记录文件 (追加写入，不覆盖历史，输出目录)
 INPUT_PATH   = "./"                           # 输入文件寻找路径 (相对脚本所在目录)
-OUTPUT_PATH  = "./"                           # 输出文件寻找路径 (相对脚本所在目录)
+OUTPUT_PATH  = "./merge/"                     # 输出文件寻找路径 (相对脚本所在目录)
 MERGE_BUF    = 1024 * 1024                    # 合并读写缓冲区大小 (1 MB)
 # =============================================================================
 
@@ -58,8 +67,8 @@ def print_usage():
 
 
 def parse_args(argv):
-    """解析命令行参数: -h/--help、-o/--output 为选项，其余为输入文件列表。
-    返回 (输入文件列表, 输出文件路径)。选项位置随意。"""
+    """解析命令行参数: -h/--help、-o/--output、-t/--target 为选项，其余为
+    输入文件列表。返回 (输入文件列表, 输出文件路径)。选项位置随意。"""
     files = []
     out_file = None
     i = 0
@@ -68,6 +77,9 @@ def parse_args(argv):
         if arg in ("-h", "--help"):
             print_usage()
             sys.exit(0)
+        elif arg in ("-t", "--target"):
+            # -t/--target 为可选标记 (不输入也行)，无值；位置参数一律视为输入文件
+            i += 1
         elif arg in ("-o", "--output"):
             if i + 1 >= len(argv):
                 print("❌ 错误: 选项 -o/--output 需要一个输出文件路径。")
@@ -78,6 +90,16 @@ def parse_args(argv):
             files.append(arg)
             i += 1
     return files, out_file
+
+
+def resolve_cmd_path(p, script_dir):
+    """命令行路径解析: 绝对路径照旧；以 ./ ../ 或 . 开头的相对路径相对
+    当前运行目录解析；不带点开头的相对路径默认相对脚本所在目录解析。"""
+    if os.path.isabs(p):
+        return p
+    if p in (".", "..") or p.startswith(("./", "../")):
+        return os.path.abspath(p)
+    return os.path.normpath(os.path.join(script_dir, p))
 
 
 def dw(s):
@@ -153,9 +175,12 @@ def resolve_files(script_dir, args, input_base, input_patterns, output_names):
         files = []
         for a in args:
             if any(ch in a for ch in "*?["):
-                # 命令行通配符: 相对当前运行目录 glob 展开 (bash 自动展开时
-                # 参数已是具体文件，不经过此分支)
+                # 命令行通配符: 先相对当前运行目录 glob 展开 (bash 自动展开时
+                # 参数已是具体文件，不经过此分支)；不带点开头的模式未匹配时
+                # 再相对脚本目录兜底，与"不带点默认脚本目录"规则一致
                 matches = sorted(glob.glob(a))
+                if not matches and not a.startswith(("./", "../")):
+                    matches = sorted(glob.glob(os.path.join(script_dir, a)))
                 if not matches:
                     print(f"⚠️ 警告: 模式 '{a}' 未匹配任何文件，已跳过。")
                 files.extend(m for m in matches if os.path.isfile(m))
@@ -238,13 +263,16 @@ def main():
     # 输出文件: -o 命令行优先，否则配置区 OUTPUT_FILES (相对 OUTPUT_PATH)
     outputs_by_fmt = {}  # 格式 -> 输出文件路径
     if out_file:
-        ext = os.path.splitext(out_file)[1].lower().lstrip(".")
+        out_base = resolve_cmd_path(out_file, script_dir)
+        ext = os.path.splitext(out_base)[1].lower().lstrip(".")
         if ext in ("xyz", "extxyz"):
             # -o 为输出文件完整路径: 扩展名决定合并格式
-            outputs_by_fmt[ext] = out_file
+            outputs_by_fmt[ext] = out_base
+            output_dir = os.path.dirname(out_base)
         else:
             # -o 为输出目录: 文件名用配置区 OUTPUT_FILES 对应格式
-            for f in expand_patterns(OUTPUT_FILES, out_file):
+            output_dir = out_base
+            for f in expand_patterns(OUTPUT_FILES, out_base):
                 fmt = os.path.splitext(f)[1].lower().lstrip(".")
                 if fmt in ("xyz", "extxyz"):
                     outputs_by_fmt[fmt] = f
@@ -252,8 +280,8 @@ def main():
                 print("❌ 错误: 配置区 OUTPUT_FILES 中没有 .xyz/.extxyz 文件名。")
                 sys.exit(1)
     else:
-        output_base = os.path.normpath(os.path.join(script_dir, OUTPUT_PATH))
-        for f in expand_patterns(OUTPUT_FILES, output_base):
+        output_dir = os.path.normpath(os.path.join(script_dir, OUTPUT_PATH))
+        for f in expand_patterns(OUTPUT_FILES, output_dir):
             fmt = os.path.splitext(f)[1].lower().lstrip(".")
             if fmt in ("xyz", "extxyz"):
                 outputs_by_fmt[fmt] = f
@@ -305,8 +333,8 @@ def main():
         merge_files(f_list, out)
         outputs.append((out, total))
 
-    # 追加写入合并记录 (多次运行不覆盖历史)
-    record_path = os.path.join(script_dir, RECORD_FILE)
+    # 追加写入合并记录 (多次运行不覆盖历史，位于输出目录)
+    record_path = os.path.join(output_dir, RECORD_FILE)
     if outputs:
         write_record({"inputs": table, "outputs": outputs}, record_path)
         print(f"ℹ️ 合并记录已追加: {os.path.abspath(record_path)}")

@@ -1,0 +1,1 @@
+for d in 1_md*/; do [ -d "$d" ] && (cd "$d" && sbatch sub_MD.sh) && sleep 5; done

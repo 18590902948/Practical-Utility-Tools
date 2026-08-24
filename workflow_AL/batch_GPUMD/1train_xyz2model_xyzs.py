@@ -1,106 +1,34 @@
 #!/usr/bin/env python3
 """
 =============================================================================
-GPUMDkit: A User-Friendly Toolkit for GPUMD and NEP
-Repository: https://github.com/zhyan0603/GPUMDkit
-Citation: Z. Yan et al., GPUMDkit: A User-Friendly Toolkit for GPUMD and NEP,
-          MGE Advances, 2026, e70074 (https://doi.org/10.1002/mgea.70074)
-=============================================================================
-脚本:       train_xyz2model_xyz.py  (pos2model_xyz.py 的 fork 版，改造为
-            主动学习 MD 模拟的初始结构创建器)
-分类:       主动学习工作流脚本
-用途:       从 NEP 训练目录的输入文件 (DEFAULT_INPUT) 中按指定帧号或随机
-            抽取结构，输出为独立的 model.xyz (主动学习 MD 初始结构)，并
-            同步 nep.txt 与 sub_MD.sh 至各 1_md* 文件夹。
-
-运行前提 (重要):
-  本脚本默认在 NEP 训练目录中运行。运行前会检查当前目录是否同时存在
-  nep.txt、nep.in 与输入文件 (DEFAULT_INPUT) 三个文件，三者齐全才判定
-  为 NEP 训练目录并继续执行; 否则脚本直接退出。
-  输入文件固定为当前目录下 DEFAULT_INPUT 指定的文件 (见脚本顶部)。
-
-帧号约定 (重要):
-  命令行传入的帧号为 OVITO 中显示的 0 起始索引 (0 = 第一帧)。
-  抽取出的结构在文本编辑器中打开是第 (n+1) 帧 (1 起始)。
-  输出文件夹命名为 1_md<n>，与 OVITO 帧号一致。
-  每次抽取时脚本会同时打印两种视角，便于当场核对对应关系。
-
-路径约定:
-  脚本运行 (读写文件、创建文件夹) 时一律使用相对路径 (相对于当前运行
-  目录); 而终端打印与 extracted_frames.txt 记录中显示的是绝对路径。
-  输出根目录默认为当前目录的父目录 (相对路径 ..)。
-
-帧记录与去重:
-  每次成功抽取的帧会追加写入当前运行目录下的 extracted_model_xyz.txt，
-  首行为表头，每行包含: 帧号、原子数、输出绝对路径、事件、状态。
-    事件: 新建 (首次抽取) / 重建 (记录过但重新生成) / 已被移除 (检测到文件消失)。
-    状态: 存在 (文件在) / 丢失 (文件不在)。
-  旧格式记录 (无原子数列) 首次运行时自动迁移: 原子数从 model.xyz
-  第一行补读，文件已丢失则记 '-'
-  每次运行时先对比 txt 记录与磁盘上的实际文件，更新状态列:
-    - 文件存在 → 状态保持"存在" (事件保留原值);
-    - 文件缺失 → 该行更新为事件"已被移除"、状态"丢失"。
-  然后按以下规则判断是否重复:
-    - 有记录且文件夹与 model.xyz 都存在 → 跳过，不再重复生成;
-    - 文件夹或 model.xyz 缺失 (例如被手动删除) → 重新生成。
-  该规则同时适用于固定抽帧与随机抽帧模式 (随机模式中，
-  已记录且输出完整的帧会从随机池中排除)。
-
-输出文件夹:
-  每一帧输出到 <outdir>/<MD_FOLDER_PREFIX><n>/model.xyz。
-  文件夹前缀 (默认 1_md) 是脚本顶部的可配置参数。
-
-自动同步 (每次运行结束都会执行):
-  1) 若运行目录下存在 nep.txt，会复制 (覆盖) 到输出根目录下
-     所有 1_md* 文件夹，保证势函数最新且 MD 目录自包含;
-  2) 每个 1_md* 文件夹都会重新生成 sub_MD.sh，内容由脚本开头
-     的 SUBMISSION_SCRIPT 变量定义 (修改该变量后重跑脚本即可
-     全量同步)，所有文件夹内容一致。注意: 手动改过的 sub_MD.sh
-     会被覆盖。
-  注意: run.in 不在此脚本的同步范围内，需自行准备/同步。
-
-超算 Linux 适配 (脚本主要运行环境):
-  - stdout 强制 UTF-8, 避免超算 locale 非 UTF-8 时打印中文报错;
-  - 生成 sub_MD.sh 统一写 LF 换行并赋予执行权限;
-  - 缺少 ASE 库时给出明确的安装提示。
-
-两种模式:
-  1) 固定抽帧 (默认)
-     python train_xyz2model_xyz.py [选项] 帧号 [帧号 ...]
-     显式指定一个或多个 OVITO 帧号，重复帧号会忽略并给出警告。
-  2) 随机抽帧
-     python train_xyz2model_xyz.py [选项] random <n>
-     随机抽取 <n> 个不重复的帧。未设置随机种子，每次运行结果不同;
-     抽中的帧号会打印出来，便于记录复现。
-
-选项:
-  -o, --outdir DIR   输出根目录 (默认: 当前目录的父目录，保持训练目录
-                     如 1_train/ 整洁)。
-  (输入文件固定，无 -i 选项; 由脚本顶部 DEFAULT_INPUT 变量指定。)
-输出:
-  <outdir>/1_md<帧号>/model.xyz   (每个抽取帧一个文件夹)
-===================================================================================
+脚本:        train_xyz2model_xyzs.py
+分类:        主动学习工作流脚本 (结构抽取/转换类)
+功能:        从 NEP 训练目录的 train.xyz 中按指定帧号或随机抽取结构，每帧
+             输出为 <outdir>/1_md<帧号>/model.xyz (主动学习 MD 初始结构)，
+             并同步 nep.txt 与 sub_MD.sh 至所有 1_md* 文件夹。
+使用方法:    python train_xyz2model_xyzs.py [选项] 帧号 [帧号 ...]
+             python train_xyz2model_xyzs.py [选项] -ran <n>
+参数:        -o/--outdir DIR   输出根目录 (默认: 当前目录的父目录 ..)
+             -h/--help         显示帮助
+模式参数:    --extract/-ext   固定抽帧（默认）：提取指定帧号 [帧号 ...]
+             --random/-ran   随机抽帧：随机抽取 n 帧（用法：--random <n>）
+             (模式互斥，同时指定多个时报错；选项位置随意)
+输入文件:    train.xyz (extxyz 格式，从当前运行目录读取)
+输出文件:
+  model.xyz                  每个抽取帧输出到 <outdir>/1_md<帧号>/model.xyz
+  extracted_model_xyz.txt    记录文件 (帧号/原子数/路径/事件/状态，追加模式)
+输出路径:    默认当前目录的父目录 (..，保持训练目录整洁)；可用 -o/--outdir 指定
+运行前提:    需在 NEP 训练目录 (含 nep.txt、nep.in、train.xyz) 中运行
+约定:        帧号为 OVITO 0 起始索引 (0 = 第一帧)；已记录且输出完整的帧
+             自动跳过，删除输出后下次自动重建；每次运行结束自动同步
+             nep.txt 与 sub_MD.sh 到所有 1_md* 文件夹 (run.in 需自备)
 示例:
-  python train_xyz2model_xyz.py 5 9 66
-      # OVITO 帧 5/9/66 (= 编辑器中第 6/10/67 帧)
-      # -> ../1_md5/model.xyz, ../1_md9/model.xyz, ../1_md66/model.xyz
-
-  python train_xyz2model_xyz.py 7
-      # -> ../1_md7/model.xyz (编辑器中第 8 帧)
-
-  python train_xyz2model_xyz.py random 3
-      # 随机不重复抽 3 帧，例如 -> ../1_md12/model.xyz, ...
-
-  python train_xyz2model_xyz.py -o /some/dir 2
-      # 输出到 /some/dir/1_md2/model.xyz 而非默认父目录
-===================================================================================
-去重 (两种模式通用):
-  重复运行同一命令时，txt 中已记录且文件夹与 model.xyz 都存在的帧会被跳过:
-    python train_xyz2model_xyz.py 5 9 66
-    python train_xyz2model_xyz.py 5 9 66   # 第二次运行: 三帧全部跳过
-  若手动删除了 1_md5/model.xyz (或整个文件夹)，下次运行会重新抽取帧 5。
-作者:       Zihan YAN (yanzihan@westlake.edu.cn)
-最后修改:   2026-08-22
+  python train_xyz2model_xyzs.py 5 9 66        # 固定抽帧 (默认)
+  python train_xyz2model_xyzs.py -ext 7        # 固定抽帧 (显式声明)
+  python train_xyz2model_xyzs.py -ran 3        # 随机抽帧
+  python train_xyz2model_xyzs.py -o /some/dir 2
+作者:        Hongbo Sun
+最后修改日期: 2026-08-24
 =============================================================================
 """
 
@@ -110,39 +38,21 @@ import random
 import shutil
 import sys
 
-# 超算 locale 可能非 UTF-8 (如 POSIX/C), 强制 stdout 用 UTF-8,
-# 避免打印中文时抛 UnicodeEncodeError (Windows 终端显示乱码不影响功能)。
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8")
-
-try:
-    from ase.io import read, write
-except ImportError:
-    print("错误: 未找到 ASE (Python 库)。请在超算环境安装: pip install ase")
-    sys.exit(1)
-
-OUTPUT_FILE = "model.xyz"
-# 输入文件 (extxyz 格式)，固定从当前目录读取。
-# 如需更换输入文件 (如 test.xyz)，只改本行即可，其余逻辑自动跟随。
-DEFAULT_INPUT = "train.xyz"
-# 输出文件夹命名: <MD_FOLDER_PREFIX><ovito帧号>，例如 1_md5。
-# 如需更换命名方案，修改此前缀即可。
-MD_FOLDER_PREFIX = "1_md"
-# 帧抽取记录文件 (位于当前运行目录)，每行记录: OVITO 帧号、输出绝对
-# 路径、事件 (新建/重建/已被移除)、状态 (存在/丢失)，用于避免重复
-# 使用同一结构并审计文件状态。
-RECORD_FILE = "extracted_model_xyz.txt"
-# 记录文件表头 (帧号 / 原子数 / 路径 / 事件 / 状态)，首次创建记录
-# 文件时写入; 以 # 开头，不参与解析。
-RECORD_HEADER = "# " + f"{'帧号':<20}{'原子数':<8}{'路径':<60}{'事件':<16}状态\n"
-
-# =====================================================================
+# ============================== 参数配置区 =====================================
+SCRIPT_DIR       = os.path.dirname(os.path.abspath(__file__))   # 脚本所在目录 (不带点相对路径基准)
+INPUT_PATH       = "."                # 输入文件寻找路径 (相对脚本所在目录；正常运行=当前运行目录)
+DEFAULT_INPUT    = "train.xyz"        # 输入文件 (extxyz 格式，固定从 INPUT_PATH 读取)
+OUTPUT_FILE      = "model.xyz"        # 输出文件 (每个抽取帧输出到 <outdir>/1_md<帧号>/ 下)
+OUTPUT_PATH      = ".."               # 输出根目录 (相对脚本所在目录；默认父目录保持训练目录整洁；-o 命令行优先)
+MD_FOLDER_PREFIX = "1_md"             # 输出文件夹前缀 (如 1_md5)
+RECORD_FILE      = "extracted_model_xyz.txt"   # 记录文件 (帧号/原子数/路径/事件/状态，追加模式，脚本所在目录)
+RECORD_HEADER    = "# " + f"{'帧号':<20}{'原子数':<8}{'路径':<60}{'事件':<16}状态\n"
+# =============================================================================
 # 提交脚本模板 (sub_MD.sh): 此变量的内容写入每个 MD 文件夹的 sub_MD.sh。
 # 按你的超算环境调整: 作业名 / 队列分区 / 资源限制 / 模块加载 / 运行命令。
 # 修改后重跑本脚本即可同步到所有 1_md* 文件夹 (内容一致)。
 # 注意: 三引号后的空行在写入 sub_MD.sh 时会被自动去掉 (lstrip),
 #       保证 #!/bin/bash 仍是文件第一行。
-# =====================================================================
 SUBMISSION_SCRIPT = """
 #!/bin/bash
 #SBATCH --job-name=MoTe2_MD
@@ -167,47 +77,90 @@ gpumd
 exit
 """
 
+# ============================== 环境准备区 =====================================
+# 超算 locale 可能非 UTF-8 (如 POSIX/C), 强制 stdout 用 UTF-8,
+# 避免打印中文时抛 UnicodeEncodeError (Windows 终端显示乱码不影响功能)。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
+# ASE 依赖检查: 缺少时给出明确的安装提示后退出
+try:
+    from ase.io import read, write
+except ImportError:
+    print("❌ 错误: 未找到 ASE (Python 库)。请在超算环境安装: pip install ase")
+    sys.exit(1)
+# =============================================================================
+
+
+# ============================== 函数配置区 =====================================
 
 def print_usage():
     print(__doc__)
 
 
+def resolve_cmd_path(p):
+    """命令行路径解析: 绝对路径照旧; ./、../、. 开头相对当前运行目录;
+    不带点开头相对脚本所在目录 (规范第八节)。"""
+    if os.path.isabs(p):
+        return p
+    if p.startswith(("./", "../")) or p == ".":
+        return os.path.abspath(p)
+    return os.path.abspath(os.path.join(SCRIPT_DIR, p))
+
+
 def parse_args(argv):
-    """解析选项 (-o/--outdir, -h/--help)，返回剩余位置参数。
+    """解析选项: -o/--outdir、-h/--help、-ext/--extract、-ran/--random。
+    返回 (outdir, mode, rest)；mode: "extract"/"random"/None (默认固定抽帧)。
     输入文件固定 (DEFAULT_INPUT)，无 -i 选项。"""
     outdir = None
+    mode = None
     rest = []
     i = 0
     while i < len(argv):
         arg = argv[i]
         if arg in ("-o", "--outdir"):
             if i + 1 >= len(argv):
-                print(f"错误: 选项 {arg} 需要一个目录。")
+                print(f"❌ 错误: 选项 {arg} 需要一个目录。")
                 sys.exit(1)
-            outdir = argv[i + 1]
+            outdir = resolve_cmd_path(argv[i + 1])
             i += 2
         elif arg in ("-h", "--help"):
             print_usage()
             sys.exit(0)
+        elif arg in ("-ext", "--extract"):
+            if mode is not None:
+                print("❌ 错误: 模式选项互斥，只能指定一个模式 "
+                      "(--extract/-ext 或 --random/-ran)。")
+                sys.exit(1)
+            mode = "extract"
+            i += 1
+        elif arg in ("-ran", "--random"):
+            if mode is not None:
+                print("❌ 错误: 模式选项互斥，只能指定一个模式 "
+                      "(--extract/-ext 或 --random/-ran)。")
+                sys.exit(1)
+            mode = "random"
+            i += 1
         else:
             rest.append(arg)
             i += 1
-    return outdir, rest
+    return outdir, mode, rest
 
 
 def check_nep_training_dir():
     """检查当前目录是否为 NEP 训练目录: 必须同时存在 nep.txt、
     DEFAULT_INPUT、nep.in 三个文件，否则提示并退出脚本。"""
     required = ("nep.txt", DEFAULT_INPUT, "nep.in")
-    missing = [name for name in required if not os.path.isfile(name)]
+    missing = [name for name in required
+               if not os.path.isfile(os.path.join(INPUT_PATH, name))]
     if missing:
-        print("错误: 当前目录不是有效的 NEP 训练目录。")
-        print("本脚本必须在同时包含以下三个文件的目录中运行:")
-        print("  " + "、".join(required))
-        print(f"当前目录: {os.path.abspath(os.getcwd())}")
-        print(f"缺少文件: {'、'.join(missing)}")
+        print("❌ 错误: 当前目录不是有效的 NEP 训练目录。")
+        print("   本脚本必须在同时包含以下三个文件的目录中运行:")
+        print("   " + "、".join(required))
+        print(f"   当前目录: {os.path.abspath(os.getcwd())}")
+        print(f"   缺少文件: {'、'.join(missing)}")
         sys.exit(1)
-    print("已确认当前目录为 NEP 训练目录 "
+    print("✅ 已确认当前目录为 NEP 训练目录 "
           f"({os.path.abspath(os.getcwd())})，"
           f"检测到 nep.txt、{DEFAULT_INPUT}、nep.in。")
 
@@ -310,7 +263,8 @@ def append_record(frames, indices, outdir, recorded):
             path_col = max(60, len(out_path) + 1)
             f.write(
                 f"{idx:<22}{natom:<8}{out_path:<{path_col}}{event:<16}存在\n")
-    print(f"已记录 {len(indices)} 个新帧到 {os.path.abspath(RECORD_FILE)}。")
+    print(f"✅ 已记录 {len(indices)} 个新帧到 "
+          f"{os.path.abspath(RECORD_FILE)}。")
 
 
 def output_complete(idx, outdir):
@@ -338,9 +292,9 @@ def extract_and_save(frames, ovito_index, outdir):
     os.makedirs(folder, exist_ok=True)
     out_path = os.path.join(folder, OUTPUT_FILE)
     if os.path.exists(out_path):
-        print(f"  提示: {os.path.abspath(out_path)} 已存在，将被覆盖。")
+        print(f"  ℹ️ 提示: {os.path.abspath(out_path)} 已存在，将被覆盖。")
     write(out_path, frames[ovito_index], format="extxyz")
-    print(f"  OVITO 帧 {ovito_index} "
+    print(f"  📦 OVITO 帧 {ovito_index} "
           f"(= 编辑器中第 {ovito_index + 1} 帧) "
           f"-> {os.path.abspath(out_path)}")
 
@@ -358,70 +312,84 @@ def sync_md_folder_files(outdir):
         if name.startswith(MD_FOLDER_PREFIX)
         and os.path.isdir(os.path.join(outdir, name)))
     if not folders:
-        print("输出根目录下未发现任何 1_md* 文件夹，跳过同步。")
+        print("ℹ️ 提示: 输出根目录下未发现任何 1_md* 文件夹，跳过同步。")
         return
-    if os.path.isfile("nep.txt"):
+    if os.path.isfile(os.path.join(INPUT_PATH, "nep.txt")):
         for name in folders:
             dest = os.path.join(outdir, name, "nep.txt")
-            shutil.copy2("nep.txt", dest)
-            print(f"  已复制 nep.txt -> {os.path.abspath(dest)}")
+            shutil.copy2(os.path.join(INPUT_PATH, "nep.txt"), dest)
+            print(f"  📦 已复制 nep.txt -> {os.path.abspath(dest)}")
     else:
-        print("提示: 运行目录未发现 nep.txt，未复制势文件到 MD 文件夹。")
+        print("ℹ️ 提示: 运行目录未发现 nep.txt，未复制势文件到 MD 文件夹。")
     for name in folders:
         dest = os.path.join(outdir, name, "sub_MD.sh")
         with open(dest, "w", encoding="utf-8", newline="\n") as f:
             # lstrip: 去掉模板开头的空行, 保证 #!/bin/bash 是第一行
             f.write(SUBMISSION_SCRIPT.lstrip("\n"))
         os.chmod(dest, 0o755)  # 赋予执行权限, 便于直接 ./sub_MD.sh
-        print(f"  已生成 sub_MD.sh -> {os.path.abspath(dest)}")
+        print(f"  📦 已生成 sub_MD.sh -> {os.path.abspath(dest)}")
 
 
 def main():
-    outdir, rest = parse_args(sys.argv[1:])
+    outdir, mode, rest = parse_args(sys.argv[1:])
 
     # 脚本默认在 NEP 训练目录中运行，先确认当前目录合法再继续
     check_nep_training_dir()
 
-    if not rest:
+    if not rest and mode is None:
         print_usage()
         sys.exit(0)
+    if not rest and mode == "extract":
+        print("❌ 用法: python train_xyz2model_xyzs.py -ext 帧号 [帧号 ...]")
+        sys.exit(1)
+
+    # 旧写法兼容: 位置参数 random 视为随机抽帧模式 (推荐改用 -ran/--random)
+    if rest and rest[0] == "random":
+        if mode == "extract":
+            print("❌ 错误: 模式选项互斥，不能同时使用 --extract/-ext "
+                  "与位置参数 random。")
+            sys.exit(1)
+        if mode is None:
+            print("ℹ️ 提示: 位置参数 random 是旧写法，建议改用 "
+                  "--random/-ran 选项。")
+            mode = "random"
+        rest = rest[1:]
 
     recorded = load_record()
     if recorded:
-        print(f"记录文件 {os.path.abspath(RECORD_FILE)} "
+        print(f"ℹ️ 记录文件 {os.path.abspath(RECORD_FILE)} "
               f"中的已用帧: {sorted(recorded)}")
     # 运行前对比磁盘文件，更新 txt 中每帧的状态列
     n_exist, n_lost = update_record_status()
     if recorded:
-        print(f"已更新记录状态: {n_exist} 帧存在, {n_lost} 帧丢失。")
+        print(f"ℹ️ 已更新记录状态: {n_exist} 帧存在, {n_lost} 帧丢失。")
 
     # 一次性读取全部帧 (index=":" 返回列表)
-    frames = read(DEFAULT_INPUT, index=":")
+    input_path = os.path.join(INPUT_PATH, DEFAULT_INPUT)
+    frames = read(input_path, index=":")
     nframes = len(frames)
-    print(f"已从 {os.path.abspath(DEFAULT_INPUT)} 读取 {nframes} 帧。")
+    print(f"✅ 已从 {os.path.abspath(input_path)} 读取 {nframes} 帧。")
 
-    # 输出根目录: -o 选项 > 当前目录的父目录 (运行用相对路径 ..，
-    # 打印时显示绝对路径)
+    # 输出根目录: -o 选项 > 配置区 OUTPUT_PATH (相对脚本所在目录)
     if outdir is None:
-        outdir = ".."
-        print(f"未指定输出根目录，使用父目录: {os.path.abspath(outdir)}")
+        outdir = os.path.abspath(os.path.join(SCRIPT_DIR, OUTPUT_PATH))
+        print(f"ℹ️ 未指定输出根目录，使用父目录: {outdir}")
     os.makedirs(outdir, exist_ok=True)
 
-    if rest[0] == "random":
-        # 随机模式: python a.py random <n>
-        if len(rest) != 2:
-            print("用法: python a.py random <n>")
+    extracted = []  # 本次实际抽取的 OVITO 帧号 (用于结尾总结)
+    if mode == "random":
+        # 随机模式: --random/-ran <n> (旧写法 random <n> 兼容)
+        if len(rest) != 1 or not rest[0].isdigit():
+            print("❌ 用法: python train_xyz2model_xyzs.py -ran <n> "
+                  "(随机抽取 n 帧)")
             sys.exit(1)
-        if not rest[1].isdigit():
-            print(f"错误: '{rest[1]}' 不是有效的正整数。")
-            sys.exit(1)
-        n_pick = int(rest[1])
+        n_pick = int(rest[0])
         if n_pick < 1:
-            print("错误: 抽取帧数必须 >= 1。")
+            print("❌ 错误: 抽取帧数必须 >= 1。")
             sys.exit(1)
         if n_pick > nframes:
-            print(f"错误: 无法抽取 {n_pick} 帧: "
-                  f"{os.path.abspath(DEFAULT_INPUT)} "
+            print(f"❌ 错误: 无法抽取 {n_pick} 帧: "
+                  f"{os.path.abspath(input_path)} "
                   f"仅包含 {nframes} 帧。")
             sys.exit(1)
         # 排除已记录且输出完整的帧 (文件夹与 model.xyz 均存在)
@@ -430,37 +398,38 @@ def main():
         skipped = [i for i in range(nframes)
                    if not frame_available(i, recorded, outdir)]
         if skipped:
-            print(f"已排除 {len(skipped)} 个抽取过的帧 "
+            print(f"ℹ️ 已排除 {len(skipped)} 个抽取过的帧 "
                   f"(有记录且输出完整): {skipped}")
         if len(available) < n_pick:
-            print(f"错误: 仅有 {len(available)} 帧可用 "
+            print(f"❌ 错误: 仅有 {len(available)} 帧可用 "
                   f"(已排除有记录且输出完整的帧)，无法抽取 {n_pick} 帧。")
             sys.exit(1)
         picked = sorted(random.sample(available, n_pick))
-        print(f"随机抽中 {n_pick} 帧: {picked} (OVITO 帧号)。")
+        print(f"✅ 随机抽中 {n_pick} 帧: {picked} (OVITO 帧号)。")
         for idx in picked:
             extract_and_save(frames, idx, outdir)
         append_record(frames, picked, outdir, recorded)
+        extracted = picked
     else:
-        # 固定抽帧模式 (默认)
+        # 固定抽帧模式 (默认): -ext/--extract 可省略
         ovito_indices = []
         seen = set()
         for token in rest:
             if not token.isdigit():
-                print(f"错误: '{token}' 不是有效的帧号。"
-                      "用法: python a.py [帧号 ...] "
-                      "或 python a.py random <n>")
+                print(f"❌ 错误: '{token}' 不是有效的帧号。"
+                      "用法: python train_xyz2model_xyzs.py [帧号 ...] "
+                      "或 python train_xyz2model_xyzs.py -ran <n>")
                 sys.exit(1)
             idx = int(token)
             if idx in seen:
-                print(f"警告: 重复帧号 {idx} 已忽略。")
+                print(f"⚠️ 警告: 重复帧号 {idx} 已忽略。")
                 continue
             seen.add(idx)
             ovito_indices.append(idx)
 
         for idx in ovito_indices:
             if idx < 0 or idx >= nframes:
-                print(f"错误: 帧号 {idx} 超出范围 "
+                print(f"❌ 错误: 帧号 {idx} 超出范围 "
                       f"([0, {nframes - 1}]，共 {nframes} 帧)。")
                 sys.exit(1)
 
@@ -472,31 +441,39 @@ def main():
                 folder = os.path.join(outdir, f"{MD_FOLDER_PREFIX}{idx}")
                 model_path = os.path.join(folder, OUTPUT_FILE)
                 if os.path.isdir(folder) and os.path.isfile(model_path):
-                    print(f"  跳过: 帧 {idx} 已抽取过 "
+                    print(f"⚠️ 跳过: 帧 {idx} 已抽取过 "
                           f"({os.path.abspath(model_path)} 存在)。")
                     continue
                 if not os.path.isdir(folder):
-                    print(f"  提示: 帧 {idx} 有记录，但文件夹 "
+                    print(f"ℹ️ 提示: 帧 {idx} 有记录，但文件夹 "
                           f"{os.path.abspath(folder)} 不存在，重新生成。")
                 else:
-                    print(f"  提示: 帧 {idx} 有记录，但 "
+                    print(f"ℹ️ 提示: 帧 {idx} 有记录，但 "
                           f"{os.path.abspath(model_path)} 不存在，"
                           "重新生成。")
             to_extract.append(idx)
 
         if not to_extract:
-            print("无需抽取 (所有请求的帧都已抽取过)。")
+            print("ℹ️ 无需抽取 (所有请求的帧都已抽取过)。")
         else:
-            print("开始抽取以下帧:")
+            print("📦 开始抽取以下帧:")
             for idx in to_extract:
                 extract_and_save(frames, idx, outdir)
             append_record(frames, to_extract, outdir, recorded)
+            extracted = to_extract
 
     # 同步势文件与提交脚本到所有 1_md* 文件夹 (含本次新抽取的)
     sync_md_folder_files(outdir)
 
-    print("全部完成。")
+    # 运行结束集中总结关键信息 (规范: 处理数量/输出文件/记录文件)
+    summary = (f"🎉 全部完成！本次抽取 {len(extracted)} 帧"
+               + (f" (OVITO 帧号: {extracted})" if extracted else "") + "。")
+    print(f"\n{summary}")
+    print(f"   输出根目录: {outdir}")
+    print(f"   记录文件: {os.path.abspath(RECORD_FILE)}")
 
+
+# ============================== 脚本运行区 =====================================
 
 if __name__ == "__main__":
     main()

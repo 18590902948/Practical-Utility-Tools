@@ -20,3 +20,6 @@ Thumbs.db
 
 # 嵌套独立仓库（atomsk 为 clone 的独立 git 仓库，不纳入外层版本控制）
 atomsk/
+
+# 第三方源码目录（NepTrainKit-master 为外部项目源码，不纳入版本控制）
+NepTrainKit-master/
