@@ -1,116 +1,62 @@
-# ============================================================
-# 方案: 委员会主动学习 (active) 循环退火 MD (300 -> 1200 -> 300 K, 900 K 相变区停留)
-# 目的: (1) 误差驱动选帧: 多个 NEP 势组成委员会, 每 10 步检查一次原子力
-#          不确定度 σ_f, 超过阈值 δ 的结构自动追加到 active.xyz
-#        (2) 变温探索: 循环退火 + 900 K 相变区停留, 覆盖训练集外的
-#          非平衡/相变中间态构型 (温度变化大 -> σ_f 大 -> 更易触发保存)
-#        (3) 轨迹并存: dump.xyz 照常记录完整轨迹, 事后 FPS 手动选帧备用
-# 体系:   Li-MoTe2 单层, 大胞 (306 原子, 30.4 x 33.2 A), 时间步长 1 fs
-# 委员会: 4 个 NEP 势, 元素均为 Li/Mo/Te 3 种且顺序一致 (源码 force.cu check_types 校验):
-#   主势  pot_fine.txt      = fine89/nep_gen20000.txt (微调最终代, 传播 MD)
-#         pot_fine_10k.txt  = fine89/nep_gen10000.txt
-#         pot_fine_5k.txt   = fine89/nep_gen5000.txt
-#         pot_self.txt      = 1_train/nep.txt (第一版自训势, 架构不同无妨)
-#   ⚠ NEP89 (89 元素) 不能与 3 元素势混用! fine89/nep.txt 是 89 元素模型, 勿用于本文件!
-# 阈值:   分段设值 (低温小 / 高温大, 防高温段保存帧数爆炸):
-#          300/600 K 段 δ = 0.05 eV/Å; 900/1200 K 段 δ = 0.1 eV/Å
-#          (初值; 先跑 ~100 步看 active.out 的 σ_f 分布再调:
-#          太大 -> 几乎不存; 太小 -> 每步都存; 变温段 σ_f 普遍偏高)
-# 输出:   active.xyz (超阈值结构, 追加) / active.out (时间-σ_f 曲线, 追加)
-#   ⚠ active 是非传播关键字 (源码 active.cu postprocess 关闭 check_),
-#     每一段 run 之前都必须重新写 active 行, 否则第二段起静默失效!
-# ============================================================
-# 参数速查 (本文件用到的命令):
-#   potential <文件>         加载势函数文件, 可写多行组委员会 (第一个 = 主势, 传播 MD)
-#   time_step <步长>         设置 MD 积分时间步长, 单位 fs
-#   velocity <温度>          给原子赋指定温度的麦克斯韦随机初速, 单位 K
-#   ensemble nvt_nhc <T> <T0> <tau>
-#                            恒温 NVT 系综 (Nose-Hoover 链):
-#                              T   = 目标温度 (K), 体系控温到多少
-#                              T0  = 初始温度 (K), 写初速时用
-#                              tau = 温度耦合常数 (fs), 越小控温越强
-#   active <间隔> <速度> <力> <每原子σ> <阈值>
-#                            每 <间隔> 步用委员会全部势重算力, 取原子力样本标准差
-#                            最大值 σ_f (eV/Å), 超过 <阈值> 存 active.xyz;
-#                            速度/力/每原子σ 三开关 1 = 输出到 active.xyz
-#   dump_thermo <间隔>       每 <间隔> 步记一次温度/能量/压强到 thermo.out
-#                            (追加模式: 各段数据接续写入同一文件, 不覆盖)
-#   dump_xyz <分组法> <组ID> <间隔> <文件>
-#                            每 <间隔> 步输出一帧原子坐标到 <文件>
-#                            (5.6 正式版语法: 分组法 -1 = 全部原子, 组ID 填任意数忽略)
-#                            (追加模式: 各段数据接续写入同一文件, 不覆盖)
-#   dump_restart <间隔>      每 <间隔> 步覆盖写一次 restart.xyz (只留最新)
-#                            间隔取各段步数的公约数, 保证每段结束都已保存
-#   run <步数>               执行一段 MD, 跑 <步数> 步 (= 步数 × 步长 ps)
-# 注意: 每段 run 结束后 dump_*/active 的声明全部失效, 每一段都要重新写!
-# ============================================================
-potential    nep_gen20000.txt             # 主势: fine89 微调最终代 (nep_gen20000.txt), 负责传播 MD
-potential    nep_gen10000.txt         # 观察者 1: fine89/nep_gen10000.txt (只算力, 不传播)
-potential    nep_gen5000.txt          # 观察者 2: fine89/nep_gen5000.txt (只算力, 不传播)
-potential    nep.txt             # 观察者 3: 1_train/nep.txt 自训势 (只算力, 不传播)
-time_step    1.0                      # 积分步长 1.0 fs (1 fs = 1e-15 秒)
-velocity     300                      # 初始速度: 按 300 K 随机分布给原子赋初速
+potential    nep_gen20000.txt
+potential    nep_gen10000.txt
+potential    nep_gen5000.txt
+potential    nep.txt
+time_step    1.0
+velocity     300
 
-# --- 第 1 段: 300 K 平衡 (20 ps) ---
-ensemble     nvt_nhc 300 300 100      # 恒温 NVT: 目标 300 K, 初温 300 K, 耦合 100 fs
-active       10 1 1 1 0.05            # 每 10 步查一次不确定度, 输出速度/力/每原子σ_f, 阈值 0.05 eV/Å; 本段检查 2000 次, 全任务共 30000 次
-dump_thermo  100                      # 每 100 步(0.1 ps)记一次到 thermo.out, 追加不覆盖; 本段 200 次, 全任务共 3000 次
-dump_xyz     -1 1 1000 dump.xyz       # 每 1000 步(1 ps)写一帧坐标到 dump.xyz, 追加不覆盖; 本段 20 次, 全任务共 300 次
-dump_restart 10000                    # 每 1 万步(10 ps)覆盖写 restart.xyz(只留最新); 各段步数均为 1 万整数倍, 每段结束必已保存
-run          20000                    # 本阶段运行20000步（20ps），300 K 平衡，总运行步数20000步（20ps）
+ensemble     nvt_nhc 300 300 100
+active       10 1 1 1 0.05
+dump_thermo  100
+dump_xyz     -1 1 1000 dump.xyz
+dump_restart 10000
+run          20000
 
-# --- 第 2 段: 升温到 600 K (20 ps) ---
-ensemble     nvt_nhc 600 600 100      # 目标温度改为 600 K (600 步内温度从 300 爬升)
-active       10 1 1 1 0.05            # 每 10 步查一次不确定度, 输出速度/力/每原子σ_f, 阈值 0.05 eV/Å; 本段检查 2000 次, 全任务共 30000 次
-dump_thermo  100                      # 每 100 步(0.1 ps)记一次, 追加; 本段 200 次, 全任务共 3000 次
-dump_xyz     -1 1 1000 dump.xyz       # 每 1000 步(1 ps)写一帧, 追加; 本段 20 次, 全任务共 300 次
-dump_restart 10000                    # 每 1 万步(10 ps)存一次 restart.xyz
-run          20000                    # 本阶段运行20000步（20ps），升温到 600 K，总运行步数40000步（40ps）
+ensemble     nvt_nhc 600 600 100
+active       10 1 1 1 0.05
+dump_thermo  100
+dump_xyz     -1 1 1000 dump.xyz
+dump_restart 10000
+run          20000
 
-# --- 第 3 段: 升温到 900 K 并停留 (50 ps), 相变区等待 T->H 成核 ---
-ensemble     nvt_nhc 900 900 100      # 目标温度改为 900 K (估计的相变温度区间)
-active       10 1 1 1 0.1             # 每 10 步查一次不确定度, 输出速度/力/每原子σ_f, 阈值 0.1 eV/Å(高温段调大防保存爆炸); 本段检查 5000 次, 全任务共 30000 次
-dump_thermo  100                      # 每 100 步(0.1 ps)记一次, 追加; 本段 500 次, 全任务共 3000 次
-dump_xyz     -1 1 1000 dump.xyz       # 每 1000 步(1 ps)写一帧, 追加; 本段 50 次, 全任务共 300 次
-dump_restart 10000                    # 每 1 万步(10 ps)存一次 restart.xyz
-run          50000                    # 本阶段运行50000步（50ps），升温到 900 K 并停留等 T->H 成核，总运行步数90000步（90ps）
+ensemble     nvt_nhc 900 900 100
+active       10 1 1 1 0.1
+dump_thermo  100
+dump_xyz     -1 1 1000 dump.xyz
+dump_restart 10000
+run          50000
 
-# --- 第 4 段: 升温到 1200 K (20 ps) ---
-ensemble     nvt_nhc 1200 1200 100    # 目标温度改为 1200 K (上限温度)
-active       10 1 1 1 0.1             # 每 10 步查一次不确定度, 输出速度/力/每原子σ_f, 阈值 0.1 eV/Å(最高温段调最大防保存爆炸); 本段检查 2000 次, 全任务共 30000 次
-dump_thermo  100                      # 每 100 步(0.1 ps)记一次, 追加; 本段 200 次, 全任务共 3000 次
-dump_xyz     -1 1 1000 dump.xyz       # 每 1000 步(1 ps)写一帧, 追加; 本段 20 次, 全任务共 300 次
-dump_restart 10000                    # 每 1 万步(10 ps)存一次 restart.xyz
-run          20000                    # 本阶段运行20000步（20ps），升温到 1200 K，总运行步数110000步（110ps）
+ensemble     nvt_nhc 1200 1200 100
+active       10 1 1 1 0.1
+dump_thermo  100
+dump_xyz     -1 1 1000 dump.xyz
+dump_restart 10000
+run          20000
 
-# --- 第 5 段: 降温到 900 K 并停留 (50 ps), 相变区等待 H->T 或观察 H 保留 ---
-ensemble     nvt_nhc 900 900 100      # 目标温度降为 900 K (相变区停留, 看降温方向)
-active       10 1 1 1 0.1             # 每 10 步查一次不确定度, 输出速度/力/每原子σ_f, 阈值 0.1 eV/Å(高温段调大防保存爆炸); 本段检查 5000 次, 全任务共 30000 次
-dump_thermo  100                      # 每 100 步(0.1 ps)记一次, 追加; 本段 500 次, 全任务共 3000 次
-dump_xyz     -1 1 1000 dump.xyz       # 每 1000 步(1 ps)写一帧, 追加; 本段 50 次, 全任务共 300 次
-dump_restart 10000                    # 每 1 万步(10 ps)存一次 restart.xyz
-run          50000                    # 本阶段运行50000步（50ps），降温到 900 K 并停留等 H->T 或 H 保留，总运行步数160000步（160ps）
+ensemble     nvt_nhc 900 900 100
+active       10 1 1 1 0.1
+dump_thermo  100
+dump_xyz     -1 1 1000 dump.xyz
+dump_restart 10000
+run          50000
 
-# --- 第 6 段: 降温到 600 K (20 ps) ---
-ensemble     nvt_nhc 600 600 100      # 目标温度降为 600 K
-active       10 1 1 1 0.05            # 每 10 步查一次不确定度, 输出速度/力/每原子σ_f, 阈值 0.05 eV/Å; 本段检查 2000 次, 全任务共 30000 次
-dump_thermo  100                      # 每 100 步(0.1 ps)记一次, 追加; 本段 200 次, 全任务共 3000 次
-dump_xyz     -1 1 1000 dump.xyz       # 每 1000 步(1 ps)写一帧, 追加; 本段 20 次, 全任务共 300 次
-dump_restart 10000                    # 每 1 万步(10 ps)存一次 restart.xyz
-run          20000                    # 本阶段运行20000步（20ps），降温到 600 K，总运行步数180000步（180ps）
+ensemble     nvt_nhc 600 600 100
+active       10 1 1 1 0.05
+dump_thermo  100
+dump_xyz     -1 1 1000 dump.xyz
+dump_restart 10000
+run          20000
 
-# --- 第 7 段: 降温到 300 K (20 ps) ---
-ensemble     nvt_nhc 300 300 100      # 目标温度降为 300 K (室温)
-active       10 1 1 1 0.05            # 每 10 步查一次不确定度, 输出速度/力/每原子σ_f, 阈值 0.05 eV/Å; 本段检查 2000 次, 全任务共 30000 次
-dump_thermo  100                      # 每 100 步(0.1 ps)记一次, 追加; 本段 200 次, 全任务共 3000 次
-dump_xyz     -1 1 1000 dump.xyz       # 每 1000 步(1 ps)写一帧, 追加; 本段 20 次, 全任务共 300 次
-dump_restart 10000                    # 每 1 万步(10 ps)存一次 restart.xyz
-run          20000                    # 本阶段运行20000步（20ps），降温到 300 K，总运行步数200000步（200ps）
+ensemble     nvt_nhc 300 300 100
+active       10 1 1 1 0.05
+dump_thermo  100
+dump_xyz     -1 1 1000 dump.xyz
+dump_restart 10000
+run          20000
 
-# --- 第 8 段: 300 K 长时间保持 (100 ps), 观察循环后最终相是否稳定 ---
-ensemble     nvt_nhc 300 300 100      # 维持 300 K 不变
-active       10 1 1 1 0.05            # 每 10 步查一次不确定度, 输出速度/力/每原子σ_f, 阈值 0.05 eV/Å; 本段检查 10000 次, 全任务共 30000 次
-dump_thermo  100                      # 每 100 步(0.1 ps)记一次, 追加; 本段 1000 次, 全任务共 3000 次
-dump_xyz     -1 1 1000 dump.xyz       # 每 1000 步(1 ps)写一帧, 追加; 本段 100 次, 全任务共 300 次
-dump_restart 10000                    # 每 1 万步(10 ps)存一次 restart.xyz
-run          100000                   # 本阶段运行100000步（100ps），300 K 保持观察最终相稳定性，总运行步数300000步（300ps）
+ensemble     nvt_nhc 300 300 100
+active       10 1 1 1 0.05
+dump_thermo  100
+dump_xyz     -1 1 1000 dump.xyz
+dump_restart 10000
+run          100000
