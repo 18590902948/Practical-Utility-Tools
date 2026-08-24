@@ -5,7 +5,7 @@
 分类:        主动学习工作流脚本 (结构抽取/转换类)
 功能:        从 NEP 训练目录的 train.xyz 中按指定帧号或随机抽取结构，每帧
              输出为 <outdir>/1_md<帧号>/model.xyz (主动学习 MD 初始结构)，
-             并同步 nep.txt 与 sub_MD.sh 至所有 1_md* 文件夹。
+             并为每个 1_md* 文件夹生成 sub_MD.sh 任务提交脚本。
 使用方法:    python train_xyz2model_xyzs.py [选项] 帧号 [帧号 ...]
              python train_xyz2model_xyzs.py [选项] -ran <n>
 参数:        -o/--outdir DIR   输出根目录 (默认: 当前目录的父目录 ..)
@@ -20,8 +20,8 @@
 输出路径:    默认当前目录的父目录 (..，保持训练目录整洁)；可用 -o/--outdir 指定
 运行前提:    需在 NEP 训练目录 (含 nep.txt、nep.in、train.xyz) 中运行
 约定:        帧号为 OVITO 0 起始索引 (0 = 第一帧)；已记录且输出完整的帧
-             自动跳过，删除输出后下次自动重建；每次运行结束自动同步
-             nep.txt 与 sub_MD.sh 到所有 1_md* 文件夹 (run.in 需自备)
+             帧自动跳过，删除输出后下次自动重建；每次运行结束自动
+             生成 sub_MD.sh 到所有 1_md* 文件夹 (run.in 需自备)
 示例:
   python train_xyz2model_xyzs.py 5 9 66        # 固定抽帧 (默认)
   python train_xyz2model_xyzs.py -ext 7        # 固定抽帧 (显式声明)
@@ -35,7 +35,6 @@
 import datetime
 import os
 import random
-import shutil
 import sys
 
 # ============================== 参数配置区 =====================================
@@ -299,10 +298,9 @@ def extract_and_save(frames, ovito_index, outdir):
           f"-> {os.path.abspath(out_path)}")
 
 
-def sync_md_folder_files(outdir):
-    """抽取完成后同步输出根目录下所有 1_md* 文件夹:
-    1) 运行目录有 nep.txt 时复制进去 (覆盖旧版，保持势函数最新);
-    2) 重新生成 sub_MD.sh (内容由脚本开头的 SUBMISSION_SCRIPT 变量定义)。
+def generate_submission_scripts(outdir):
+    """抽取完成后为输出根目录下所有 1_md* 文件夹生成 sub_MD.sh
+    任务提交脚本 (内容由脚本开头的 SUBMISSION_SCRIPT 变量定义)。
     用 newline="\n" 写 sub_MD.sh，避免 Windows 下写出 CRLF 导致
     超算上 #!/bin/bash 解析失败; 生成后赋予执行权限 (Linux)。"""
     if not os.path.isdir(outdir):
@@ -312,15 +310,8 @@ def sync_md_folder_files(outdir):
         if name.startswith(MD_FOLDER_PREFIX)
         and os.path.isdir(os.path.join(outdir, name)))
     if not folders:
-        print("ℹ️ 提示: 输出根目录下未发现任何 1_md* 文件夹，跳过同步。")
+        print("ℹ️ 提示: 输出根目录下未发现任何 1_md* 文件夹，跳过生成。")
         return
-    if os.path.isfile(os.path.join(INPUT_PATH, "nep.txt")):
-        for name in folders:
-            dest = os.path.join(outdir, name, "nep.txt")
-            shutil.copy2(os.path.join(INPUT_PATH, "nep.txt"), dest)
-            print(f"  📦 已复制 nep.txt -> {os.path.abspath(dest)}")
-    else:
-        print("ℹ️ 提示: 运行目录未发现 nep.txt，未复制势文件到 MD 文件夹。")
     for name in folders:
         dest = os.path.join(outdir, name, "sub_MD.sh")
         with open(dest, "w", encoding="utf-8", newline="\n") as f:
@@ -462,8 +453,8 @@ def main():
             append_record(frames, to_extract, outdir, recorded)
             extracted = to_extract
 
-    # 同步势文件与提交脚本到所有 1_md* 文件夹 (含本次新抽取的)
-    sync_md_folder_files(outdir)
+    # 为所有 1_md* 文件夹生成任务提交脚本 (含本次新抽取的)
+    generate_submission_scripts(outdir)
 
     # 运行结束集中总结关键信息 (规范: 处理数量/输出文件/记录文件)
     summary = (f"🎉 全部完成！本次抽取 {len(extracted)} 帧"

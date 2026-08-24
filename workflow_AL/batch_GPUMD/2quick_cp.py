@@ -2,35 +2,38 @@
 =============================================================================
 脚本:        quick_cp.py
 分类:        文件批量复制工具
-功能:        将目标文件夹/文件（-t/--target，从这里复制）中的文件批量复制到
-             多个靶文件夹（-b/--dest，复制到的文件夹）。支持两种运行模式：
-             ① 命令行模式：-b 指定靶文件夹（支持单/双引号通配符），-t 指定
-               目标文件夹（默认复制其下全部文件）或目标文件，-tn 指定目标
+功能:        将来源文件夹/文件（-s/--source，从这里复制）中的文件批量复制到
+             多个靶文件夹（-t/--target，复制到的文件夹）。支持两种运行模式：
+             ① 命令行模式：-t 指定靶文件夹（支持单/双引号通配符），-s 指定
+               来源文件夹（默认复制其下全部文件）或来源文件，-sn 指定来源
                文件夹内的部分文件（Tab 补全见参数说明）；
              ② 交互式模式（无参数）：自动识别脚本所在目录下的规律文件夹
                作为靶文件夹，选择传递文件/文件夹后复制。
              复制前展示来源清单与靶文件夹清单，确认后执行。
 
-使用方法:    python quick_cp.py -b ./A ./B ./C -t ./D
-             python quick_cp.py -b ./A ./B ./C -t ./D -tn a.xyz b.xyz c.xyz
-             python quick_cp.py -b './A*' './B*' -t './D/*.xyz'
-             python quick_cp.py -b ./A ./B ./C -t ./a.xyz ./b.xyz ./c.xyz
+使用方法:    python quick_cp.py -t './1_md*' -s ./a.xyz ./b.xyz
+             # ① 通配符靶文件夹: 把 a.xyz、b.xyz 复制到脚本所在目录下所有 1_md* 里
+             python quick_cp.py -t ./A ./B ./C -s ./a*.xyz
+             # ② 通配符来源文件: 把脚本所在目录下所有 a*.xyz 复制到 A、B、C 里
+             python quick_cp.py -t './1_md*' -s ./D -sn a*.xyz
+             # ③ 通配符来源文件名: 把 D 文件夹内所有 a*.xyz 复制到每个 1_md* 里
              python quick_cp.py                            # 无参数，交互式模式
-参数:        -b/--dest 靶文件夹 ...   复制到的文件夹列表（支持通配符，单/双引号
-                                     均可；不带点开头相对脚本所在目录解析）
-             -t/--target 目标 ...     目标文件夹或文件列表（从这里复制；文件夹
-                                     默认复制其下全部文件，支持通配符；位置参数
-                                     可省略 -t 标记，一律视为目标）
-             -tn/--target-names ...   指定目标文件夹内的部分文件（仅对文件夹目标
-                                     生效，文件在 -t 目标文件夹内）；可输入纯
-                                     文件名（自动到各目标文件夹内查找）或带路径
-                                     形式（如 ./D/a.xyz）；Tab 补全是 shell 自带
-                                     能力，命令行输入文件名时按 Tab 可自动补全
+             # 注: 示例中的 a.xyz、b.xyz、A/B/C/D、1_md* 均为演示用占位名
+参数:        -t/--target 靶文件夹 ...   复制到的文件夹列表（支持通配符，单/双引号
+                                      均可；不带点开头相对脚本所在目录解析）
+             -s/--source 来源 ...       来源文件夹或文件列表（从这里复制；文件夹
+                                      默认复制其下全部文件，支持通配符；位置参数
+                                      可省略 -s 标记，一律视为来源）
+             -sn/--source-names ...     指定来源文件夹内的部分文件（仅对文件夹来源
+                                      生效，文件在 -s 来源文件夹内）；可输入纯
+                                      文件名（自动到各来源文件夹内查找）或带路径
+                                      形式（如 ./D/a.xyz）；Tab 补全是 shell 自带
+                                      能力，命令行输入文件名时按 Tab 可自动补全
              -h/--help                显示帮助
-输入文件:    （目标文件夹/文件，由 -t 指定）
+输入文件:    （来源文件夹/文件，由 -s 指定）
 输出文件:
   quick_cp.txt   记录文件（复制日志，追加模式，脚本所在目录）
-输出路径:    各靶文件夹（-b/--dest 指定）
+输出路径:    各靶文件夹（-t/--target 指定）
 作者:        Hongbo Sun
 最后修改日期: 2026-08-24
 =============================================================================
@@ -100,9 +103,10 @@ def show_table(rows, headers, title=None):
 
 
 def ask(prompt):
-    """输入询问：必须显式输入内容并回车（防止误触）；输入 q 退出脚本"""
+    """输入询问：提示独占一行，必须显式输入内容并回车（防止误触）；
+    输入 q 退出脚本"""
     while True:
-        s = input(f"\n{prompt} ").strip()
+        s = input(f"\n{prompt}\n").strip()
         if s.lower() in ("q", "quit", "exit"):
             print("👋 已取消，退出脚本。")
             sys.exit(0)
@@ -112,10 +116,11 @@ def ask(prompt):
 
 
 def ask_yes_no(prompt, default=None):
-    """是非询问：必须显式输入 y/n 确认；default 仅作为提示中的建议值"""
+    """是非询问：必须显式输入 y/n 确认；提示末尾自动标注选项；
+    default 仅作为提示中的建议值"""
     hint = "" if default is None else f"（建议：{default}）"
     while True:
-        s = ask(f"{prompt} {hint}")
+        s = ask(f"{prompt}（y=是，n=否）{hint}")
         if s.lower() in ("y", "yes", "是"):
             return True
         if s.lower() in ("n", "no", "否"):
@@ -147,14 +152,16 @@ def parse_choice(text, total, allow_all=True):
     return result
 
 
-def choose_ids(total, prompt):
-    """交互式选择编号：必须显式输入（支持 all、1,3,5、1-3）；返回选中的编号集合（1 起）"""
+def choose_ids(total, prompt, allow_all=True):
+    """交互式选择编号：必须显式输入；默认支持 all、1,3,5、1-3；
+    allow_all=False 时禁止 all 模式；返回选中的编号集合（1 起）"""
     while True:
-        ids = parse_choice(ask(prompt), total)
+        ids = parse_choice(ask(prompt), total, allow_all=allow_all)
         if ids is not None:
             return ids
         range_hint = "1" if total == 1 else f"1-{total}"
-        print(f"⚠️  输入无效，请输入 {range_hint} 范围内的编号，支持 1,3,5 / 1-3 / all。")
+        mode_hint = "，支持 1,3,5 / 1-3 / all" if allow_all else "，支持 1,3,5 / 1-3"
+        print(f"⚠️  输入无效，请输入 {range_hint} 范围内的编号{mode_hint}。")
 
 
 def resolve_cmd_path(p, script_dir=SCRIPT_DIR):
@@ -174,27 +181,27 @@ def expand_glob(a, script_dir=SCRIPT_DIR):
     return [os.path.abspath(m) for m in matches]
 
 
-def resolve_dest_dirs(raw, script_dir=SCRIPT_DIR):
-    """展开靶文件夹参数（-b/--dest）：通配符展开后仅保留目录，去重保持顺序"""
-    dests = []
+def resolve_target_dirs(raw, script_dir=SCRIPT_DIR):
+    """展开靶文件夹参数（-t/--target）：通配符展开后仅保留目录，去重保持顺序"""
+    targets = []
     for a in raw:
         matches = expand_glob(a, script_dir)
         if not matches:
             print(f"⚠️ 靶文件夹 {a} 未匹配到任何文件夹，已忽略。")
             continue
         for m in matches:
-            if os.path.isdir(m) and m not in dests:
-                dests.append(m)
-    return dests
+            if os.path.isdir(m) and m not in targets:
+                targets.append(m)
+    return targets
 
 
-def resolve_targets(raw, script_dir=SCRIPT_DIR):
-    """展开目标参数（-t/--target）：文件进 src_files，文件夹进 src_dirs，去重保持顺序"""
+def resolve_sources(raw, script_dir=SCRIPT_DIR):
+    """展开来源参数（-s/--source）：文件进 src_files，文件夹进 src_dirs，去重保持顺序"""
     src_files, src_dirs = [], []
     for a in raw:
         matches = expand_glob(a, script_dir)
         if not matches:
-            print(f"⚠️ 目标 {a} 未匹配到任何文件/文件夹，已忽略。")
+            print(f"⚠️ 来源 {a} 未匹配到任何文件/文件夹，已忽略。")
             continue
         for m in matches:
             if os.path.isdir(m):
@@ -207,7 +214,8 @@ def resolve_targets(raw, script_dir=SCRIPT_DIR):
 
 
 def collect_sources(src_files, src_dirs, names, script_dir=SCRIPT_DIR):
-    """收集来源文件：-tn 带路径文件名按命令行路径规则直接用（不依赖文件夹目标），纯文件名到各文件夹目标内查找；无 -tn 时文件夹目标内全部文件"""
+    """收集来源文件：-sn 带路径文件名按命令行路径规则直接用（不依赖文件夹来源），
+    纯文件名到各来源文件夹内查找（支持 * 通配符）；无 -sn 时来源文件夹内全部文件"""
     if names:
         plain, with_path = [], []
         for n in names:
@@ -218,18 +226,28 @@ def collect_sources(src_files, src_dirs, names, script_dir=SCRIPT_DIR):
                 if p not in src_files:
                     src_files.append(p)
             else:
-                print(f"⚠️ 目标文件不存在，已忽略：{p}")
+                print(f"⚠️ 来源文件不存在，已忽略：{p}")
         if plain:
             if not src_dirs:
-                print("⚠️ -tn/--target-names 纯文件名需要文件夹目标（-t 目录）配合，当前没有文件夹目标，已忽略。")
+                print("⚠️ -sn/--source-names 纯文件名需要文件夹来源（-s 目录）配合，当前没有文件夹来源，已忽略。")
             for d in src_dirs:
                 for n in plain:
-                    p = os.path.join(d, n)
-                    if os.path.isfile(p):
-                        if p not in src_files:
-                            src_files.append(p)
+                    if glob.has_magic(n):
+                        # 含通配符: 在来源文件夹内展开匹配的文件（如 -sn a*.xyz）
+                        matched = [p for p in sorted(glob.glob(os.path.join(d, n)))
+                                   if os.path.isfile(p)]
+                        if not matched:
+                            print(f"⚠️ 来源文件不存在，已忽略：{os.path.join(d, n)}")
+                        for p in matched:
+                            if p not in src_files:
+                                src_files.append(p)
                     else:
-                        print(f"⚠️ 目标文件不存在，已忽略：{p}")
+                        p = os.path.join(d, n)
+                        if os.path.isfile(p):
+                            if p not in src_files:
+                                src_files.append(p)
+                        else:
+                            print(f"⚠️ 来源文件不存在，已忽略：{p}")
         return src_files
     for d in src_dirs:
         for n in sorted(os.listdir(d)):
@@ -240,42 +258,42 @@ def collect_sources(src_files, src_dirs, names, script_dir=SCRIPT_DIR):
 
 
 def parse_args(argv):
-    """命令行参数解析：-b/--dest 靶文件夹、-t/--target 目标、-tn/--target-names 文件名；
-    选项后收集所有非选项参数（直到下一个选项）；位置参数视为目标；-h 打印帮助退出"""
-    dest_raw, target_raw, names = [], [], []
+    """命令行参数解析：-t/--target 靶文件夹、-s/--source 来源、-sn/--source-names 文件名；
+    选项后收集所有非选项参数（直到下一个选项）；位置参数视为来源；-h 打印帮助退出"""
+    target_raw, source_raw, names = [], [], []
     i, n = 0, len(argv)
     while i < n:
         a = argv[i]
         if a in ("-h", "--help"):
             print(__doc__)
             sys.exit(0)
-        elif a in ("-b", "--dest"):
-            mode = "dest"
         elif a in ("-t", "--target"):
             mode = "target"
-        elif a in ("-tn", "--target-names"):
+        elif a in ("-s", "--source"):
+            mode = "source"
+        elif a in ("-sn", "--source-names"):
             mode = "names"
         elif a.startswith("-") and a != "-":
             print(f"❌ 未知选项: {a}（可用 -h 查看帮助）")
             sys.exit(1)
         else:
-            target_raw.append(a)  # 位置参数一律视为目标（-t 可省略）
+            source_raw.append(a)  # 位置参数一律视为来源（-s 可省略）
             i += 1
             continue
         i += 1
         while i < n and not argv[i].startswith("-"):
-            {"dest": dest_raw, "target": target_raw, "names": names}[mode].append(argv[i])
+            {"target": target_raw, "source": source_raw, "names": names}[mode].append(argv[i])
             i += 1
-    return dest_raw, target_raw, names
+    return target_raw, source_raw, names
 
 
-def write_record(cmdline, dests, sources, copied, skipped, failed):
+def write_record(cmdline, targets, sources, copied, skipped, failed):
     """记录文件：复制日志（追加模式），分节记录时间戳/命令行/来源/靶文件夹/统计"""
     rec_path = os.path.join(SCRIPT_DIR, RECORD_FILE)
     first = not os.path.exists(rec_path)
     lines = [f"## {time.strftime('%Y-%m-%d %H:%M:%S')}",
              f"[命令行] {cmdline}",
-             f"[靶文件夹] ({len(dests)}) " + "  ".join(dests),
+             f"[靶文件夹] ({len(targets)}) " + "  ".join(targets),
              f"[来源文件] ({len(sources)}) " + "  ".join(sources),
              f"[结果] 复制成功 {copied} 个，跳过 {skipped} 个，失败 {failed} 个",
              "#" + "=" * 79, ""]
@@ -391,11 +409,24 @@ def collect_transfer_files():
     return files
 
 
-def format_members(names, limit=10):
-    """成员列表展示：多时缩写为 1, 2, 3, …, 10"""
+def format_members(names, limit=5):
+    """成员列表展示：不超过 5 个全部展示，超过时缩写为 1, 2, 3, …, 10"""
     if len(names) <= limit:
         return ", ".join(names)
     return ", ".join(names[:3]) + ", …, " + names[-1]
+
+
+def show_groups(groups, selected=None):
+    """展示靶文件夹组表格（编号/组别/形式/文件夹/数目）；
+    selected 为编号集合时只展示选中的组，标题改为"靶目标文件夹组"。"""
+    rows = [(str(i), gtype, f'"{pattern}"' if pattern else "—",
+             format_members(members), str(len(members)))
+            for i, (gtype, pattern, members) in enumerate(groups, 1)
+            if selected is None or i in selected]
+    title = (f"── 靶文件夹（共 {len(groups)} 组）──" if selected is None
+             else f"── 靶目标文件夹组（共 {len(rows)} 组）──")
+    print(f"\n{title}")
+    show_table(rows, ["编号", "组别", "形式", "文件夹", "数目"])
 
 
 def expand_targets(targets):
@@ -462,34 +493,34 @@ def copy_files(sources, targets, skip_existing):
 
 # ============================== 脚本工作区 =====================================
 
-def run_cmdline(dest_raw, target_raw, names):
-    """命令行模式：展开靶文件夹与目标，收集来源文件，展示后复制并记录"""
+def run_cmdline(target_raw, source_raw, names):
+    """命令行模式：展开靶文件夹与来源，收集来源文件，展示后复制并记录"""
     print("=" * 60)
     print("快捷复制脚本 quick_cp.py（命令行模式）")
     print("=" * 60)
-    dests = resolve_dest_dirs(dest_raw)
-    src_files, src_dirs = resolve_targets(target_raw)
+    targets = resolve_target_dirs(target_raw)
+    src_files, src_dirs = resolve_sources(source_raw)
     sources = collect_sources(src_files, src_dirs, names)
-    if not dests:
-        print("❌ 靶文件夹为空（-b/--dest 未指定或通配符未匹配到文件夹）。")
+    if not targets:
+        print("❌ 靶文件夹为空（-t/--target 未指定或通配符未匹配到文件夹）。")
         sys.exit(1)
     if not sources:
-        print("❌ 来源文件为空（-t/--target 未匹配到文件/文件夹，或 -tn 指定文件不存在）。")
+        print("❌ 来源文件为空（-s/--source 未匹配到文件/文件夹，或 -sn 指定文件不存在）。")
         sys.exit(1)
 
     print(f"\n── 待复制文件（{len(sources)} 个）──")
     show_table([(str(i), os.path.basename(s), fmt_size(os.path.getsize(s)))
-                for i, s in enumerate(sources, 1)], ["编号", "文件名", "大小"])
-    print(f"── 靶文件夹（{len(dests)} 个）──")
-    for i, d in enumerate(dests, 1):
-        print(f"  {i:>3}. {d}")
-    total_cp = len(sources) * len(dests)
-    print(f"\n将执行 {len(sources)} × {len(dests)} = {total_cp} 次复制（命令行模式：同名文件直接覆盖）。")
+                for i, s in enumerate(sources, 1)], ["编号", "文件", "大小"])
+    print(f"── 靶文件夹（{len(targets)} 个）──")
+    show_table([(str(i), t) for i, t in enumerate(targets, 1)],
+               ["编号", "文件夹"])
+    total_cp = len(sources) * len(targets)
+    print(f"\n将执行 {len(sources)} × {len(targets)} = {total_cp} 次复制（命令行模式：同名文件直接覆盖）。")
 
-    copied, skipped, failed = copy_files(sources, dests, skip_existing=False)
+    copied, skipped, failed = copy_files(sources, targets, skip_existing=False)
     print(f"\n🎉 全部完成！复制成功 {copied} 个，跳过 {skipped} 个，失败 {failed} 个。")
-    print(f"   共处理 {len(dests)} 个靶文件夹，{len(sources)} 个来源文件。")
-    write_record(" ".join(sys.argv), dests, sources, copied, skipped, failed)
+    print(f"   共处理 {len(targets)} 个靶文件夹，{len(sources)} 个来源文件。")
+    write_record(" ".join(sys.argv), targets, sources, copied, skipped, failed)
 
 
 def run_interactive():
@@ -505,54 +536,43 @@ def run_interactive():
 
     if not groups:
         print("❌ 未识别到任何规律文件夹（数字序列/字母序列/通配符模式），无法确定靶文件夹。")
-        print("   可手动补充靶文件夹（见下一步），或确认目录结构后重试。")
+        print("   请确认目录结构后重试。")
     else:
-        print(f"\n── 靶文件夹（有规律，共 {len(groups)} 组）──")
-        for i, (gtype, pattern, members) in enumerate(groups, 1):
-            pat = f'"{pattern}"' if pattern else "—"
-            print(f"  [{i:>2}] {gtype:<7} 通配符 {pat:<15} {format_members(members)}（{len(members)} 个）")
+        show_groups(groups)
 
     if transfer_folders:
-        print(f"\n── 传递文件夹（无规律，共 {len(transfer_folders)} 个）──")
-        print("  " + ", ".join(transfer_folders))
+        print(f"\n── 传递文件夹（共 {len(transfer_folders)} 个）──")
+        show_table([(str(i), name)
+                    for i, name in enumerate(transfer_folders, 1)],
+                   ["编号", "文件夹"])
     if transfer_files:
-        print(f"\n── 传递文件（脚本目录下，共 {len(transfer_files)} 个）──")
-        print("  " + ", ".join(os.path.basename(f) for f in transfer_files))
+        print(f"\n── 传递文件（共 {len(transfer_files)} 个）──")
+        show_table([(str(i), os.path.basename(f))
+                    for i, f in enumerate(transfer_files, 1)], ["编号", "文件"])
 
-    # 2. 靶组选择（默认全部）
+    # 2. 靶组选择
     if groups:
-        ids = choose_ids(len(groups), "\n请选择靶文件夹组（输入 all 或编号，如 1,2）：")
+        group_ids = choose_ids(len(groups), "请选择靶文件夹组（all 或编号）：")
         targets = [os.path.join(SCRIPT_DIR, name)
-                   for i, (_, _, members) in enumerate(groups, 1) if i in ids
+                   for i, (_, _, members) in enumerate(groups, 1) if i in group_ids
                    for name in members]
     else:
+        group_ids = set()
         targets = []
 
-    # 3. 手动补充靶文件夹（支持通配符）
-    if ask_yes_no("\n是否手动补充靶文件夹（支持通配符，如 frame_*，空格分隔多个）？"):
-        text = ask("请输入靶文件夹通配符（空格分隔多个）：")
-        for pattern in text.split():
-            matched = [p for p in glob.glob(os.path.join(SCRIPT_DIR, pattern)) if os.path.isdir(p)]
-            if not matched:
-                print(f"⚠️  通配符 {pattern} 未匹配到任何文件夹，已忽略。")
-            else:
-                for p in matched:
-                    if p not in targets:
-                        targets.append(p)
-                print(f"✅ 通配符 {pattern} 匹配 {len(matched)} 个文件夹，已加入靶文件夹。")
-
+    # 3. 手动补充靶文件夹交互已移除：靶文件夹仅由规律组识别确定
     if not targets:
-        print("❌ 靶文件夹为空，无法复制。请补充靶文件夹后重试。")
+        print("❌ 靶文件夹为空，无法复制。请确认目录结构后重试。")
         sys.exit(1)
 
     # 4. 嵌套规律子文件夹展开
     targets = expand_targets(targets)
 
-    # 5. 模式选择：传递文件 / 传递文件夹
+    # 5. 模式选择：传递当前目录文件 / 传递文件夹中文件
     print("── 传递模式 ──")
-    print("  [1] 传递文件模式   ：选择脚本目录下的文件复制到靶文件夹")
-    print("  [2] 传递文件夹模式 ：选择无规律文件夹，将其下所有文件复制到靶文件夹")
-    mode = ask("请选择传递模式（1=传递文件，2=传递文件夹）：")
+    print("  [1] 传递当前目录文件 ：选择脚本所在目录下的文件复制到靶文件夹")
+    print("  [2] 传递文件夹中文件 ：选择传递文件夹中文件，将其下文件复制到靶文件夹")
+    mode = ask("请选择传递模式：")
     while mode not in ("1", "2"):
         mode = ask("⚠️  输入无效，请输入 1 或 2：")
 
@@ -562,11 +582,11 @@ def run_interactive():
             print("❌ 脚本目录下没有可传递的文件（除脚本自身外）。")
             sys.exit(1)
         print(f"\n── 传递文件列表（共 {len(transfer_files)} 个）──")
-        show_table([(str(i), os.path.basename(f), fmt_size(os.path.getsize(f)))
-                    for i, f in enumerate(transfer_files, 1)],
-                   ["编号", "文件名", "大小"])
-        ids = choose_ids(len(transfer_files), "请选择要传递的文件（输入 all 或编号，如 1,3-5）：")
-        sources = [transfer_files[i - 1] for i in sorted(ids)]
+        show_table([(str(i), os.path.basename(f))
+                    for i, f in enumerate(transfer_files, 1)], ["编号", "文件"])
+        show_groups(groups, group_ids)
+        file_ids = choose_ids(len(transfer_files), "请选择要传递的文件编号：")
+        sources = [transfer_files[i - 1] for i in sorted(file_ids)]
     else:
         if not transfer_folders:
             print("❌ 没有传递文件夹（无规律文件夹），请改用传递文件模式。")
@@ -577,27 +597,35 @@ def run_interactive():
             inner = [n for n in os.listdir(os.path.join(SCRIPT_DIR, name))
                      if os.path.isfile(os.path.join(SCRIPT_DIR, name, n))]
             rows.append((str(i), name, str(len(inner))))
-        show_table(rows, ["编号", "文件夹名", "内部文件数"])
-        ids = choose_ids(len(transfer_folders), "请选择传递文件夹（输入 all 或编号，如 1,3-5）：")
-        sources = []
-        for i in sorted(ids):
+        show_table(rows, ["编号", "文件夹", "内部文件数"])
+        folder_ids = choose_ids(len(transfer_folders), "请选择传递文件夹：",
+                                allow_all=False)
+        folder_sources = []
+        for i in sorted(folder_ids):
             fdir = os.path.join(SCRIPT_DIR, transfer_folders[i - 1])
             for n in sorted(os.listdir(fdir)):
                 p = os.path.join(fdir, n)
                 if os.path.isfile(p):
-                    sources.append(p)
+                    folder_sources.append(p)
+        if not folder_sources:
+            print("❌ 选中文件夹内没有可传递的文件。")
+            sys.exit(1)
+        # 先展示选中文件夹内的全部文件，再让用户挑选要传递的部分
+        print(f"\n── 待复制文件（{len(folder_sources)} 个）──")
+        show_table([(str(i), os.path.basename(s))
+                    for i, s in enumerate(folder_sources, 1)], ["编号", "文件"])
+        show_groups(groups, group_ids)
+        file_ids = choose_ids(len(folder_sources), "请选择要传递的文件编号：")
+        sources = [folder_sources[i - 1] for i in sorted(file_ids)]
 
     if not sources:
         print("❌ 来源文件为空，无法复制。")
         sys.exit(1)
 
-    # 7. 展示来源与靶文件夹，最终确认
-    print(f"\n── 待复制文件（{len(sources)} 个）──")
-    for i, s in enumerate(sources, 1):
-        print(f"  {i:>3}. {os.path.basename(s)}")
-    print(f"\n── 靶文件夹（{len(targets)} 个）──")
-    for i, t in enumerate(targets, 1):
-        print(f"  {i:>3}. {t}")
+    # 7. 展示已选择文件，最终确认
+    print("\n已选择文件：")
+    show_table([(str(i), os.path.basename(s))
+                for i, s in enumerate(sources, 1)], ["编号", "文件名"])
     total_cp = len(sources) * len(targets)
     if not ask_yes_no(f"\n将执行 {len(sources)} × {len(targets)} = {total_cp} 次复制，是否执行？"):
         print("👋 已取消，未执行任何复制。")
@@ -629,12 +657,12 @@ def run_interactive():
 def main():
     """主流程：有命令行参数走命令行模式，无参数走交互式模式"""
     if len(sys.argv) > 1:
-        dest_raw, target_raw, names = parse_args(sys.argv[1:])
-        if not (dest_raw or target_raw or names):
-            print("❌ 参数不足：请用 -b 指定靶文件夹、-t 指定目标文件夹/文件。")
-            print("   python quick_cp.py -b ./A ./B ./C -t ./D")
+        target_raw, source_raw, names = parse_args(sys.argv[1:])
+        if not (target_raw or source_raw or names):
+            print("❌ 参数不足：请用 -t 指定靶文件夹、-s 指定来源文件夹/文件。")
+            print("   python quick_cp.py -t ./A ./B ./C -s ./D")
             sys.exit(1)
-        run_cmdline(dest_raw, target_raw, names)
+        run_cmdline(target_raw, source_raw, names)
     else:
         run_interactive()
 
