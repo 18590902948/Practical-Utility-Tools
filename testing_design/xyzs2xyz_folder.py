@@ -331,11 +331,21 @@ def main():
         xyz_files, extxyz_files = collect_files(folder, exclude_names, name_patterns)
         d = os.path.basename(os.path.normpath(folder))
         for f in xyz_files:
+            n = count_frames(f)
+            if n == 0:
+                # 帧数为 0 说明不是有效的 xyz 文件 (如误传 txt/记录文件)，
+                # 直接拼入会污染输出，跳过并警告
+                print(f"⚠️ 警告: 文件不含有效 xyz 帧 (可能不是 xyz 文件)，已跳过: {f}")
+                continue
             groups["xyz"].append(f)
-            table.append((f, d, "xyz", count_frames(f)))
+            table.append((f, d, "xyz", n))
         for f in extxyz_files:
+            n = count_frames(f)
+            if n == 0:
+                print(f"⚠️ 警告: 文件不含有效 xyz 帧 (可能不是 xyz 文件)，已跳过: {f}")
+                continue
             groups["extxyz"].append(f)
-            table.append((f, d, "extxyz", count_frames(f)))
+            table.append((f, d, "extxyz", n))
 
     if not table:
         print("❌ 错误: 未找到含 xyz/extxyz 文件的文件夹。")

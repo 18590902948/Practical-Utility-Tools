@@ -207,6 +207,22 @@ def clean_comment(line, save_keys):
     return " ".join(kept) + "\n"
 
 
+
+def count_frames(path):
+    """统计 xyz/extxyz 文件中的帧数 (每帧首行第一列为正整数原子数)。"""
+    n = 0
+    with open(path, "r", encoding="utf-8") as fin:
+        for line in fin:
+            parts = line.split()
+            if parts:
+                try:
+                    if int(parts[0]) > 0:
+                        n += 1
+                except ValueError:
+                    pass
+    return n
+
+
 def merge_clean_files(file_list, out_file, save_keys):
     """按帧读取合并文件，清理注释行标签后写入输出 (覆盖写，行为等价 cat)，
     统一 LF 换行；自动检查每个文件末尾，缺换行符则补一个，防止帧粘连。
@@ -224,7 +240,16 @@ def merge_clean_files(file_list, out_file, save_keys):
                     nline = fin.readline()
                     if not nline:
                         break
-                    n = int(nline.split()[0])  # 本帧原子数
+                    parts = nline.split()
+                    try:
+                        # 首列必须是正整数原子数；记录文件/总结信息等污染行会在此失败
+                        n = int(parts[0]) if parts else -1
+                        if n <= 0:
+                            raise ValueError
+                    except (ValueError, IndexError):
+                        print(f"⚠️ 警告: {os.path.basename(f)} 含非 xyz 内容"
+                              "(可能被记录文件污染)，已跳过该文件")
+                        return None
                     fout.write(nline)
                     fout.write(clean_comment(fin.readline(), save_keys))
                     for _ in range(n):
@@ -304,7 +329,7 @@ def main():
         print("❌ 错误: 未找到任何目录。")
         sys.exit(1)
 
-    # 收集各目录下的输入文件，排除输出文件 (避免重复合并)
+    # 收集各目录下的输入文件，排除输出文件 (避免重复合并)，校验含有效帧
     files = []
     for d in dirs:
         full = os.path.join(d, input_name)
@@ -314,6 +339,11 @@ def main():
         if os.path.basename(full) == os.path.basename(out_file):
             print(f"⚠️ 警告: 与输出文件同名，已跳过: {full}")
             continue
+        if count_frames(full) == 0:
+            # 帧数为 0 说明不是有效的 xyz 文件 (如误传 txt/记录文件)，
+            # 直接拼入会污染输出，跳过并警告
+            print(f"⚠️ 警告: 文件不含有效 xyz 帧 (可能不是 xyz 文件)，已跳过: {full}")
+            continue
         files.append(full)
     if not files:
         print("❌ 错误: 未找到任何输入文件。")
@@ -321,6 +351,10 @@ def main():
 
     # 合并清理并统计各文件帧数
     frame_counts = merge_clean_files(files, out_file, save_keys)
+    if frame_counts is None:
+        # 输入含非 xyz 内容 (如被记录文件污染)，输出不完整，终止并提示
+        print("❌ 错误: 存在被污染的输入文件，已终止，请检查输入文件后重试。")
+        sys.exit(1)
     total = sum(frame_counts)
     table = [(f, os.path.basename(os.path.dirname(f)), input_name, n)
              for f, n in zip(files, frame_counts)]

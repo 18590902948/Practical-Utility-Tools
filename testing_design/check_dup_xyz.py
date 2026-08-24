@@ -5,26 +5,26 @@
 功能:        严格检测 xyz / extxyz 文件内部及文件之间的重复结构帧
              (元素组成、晶胞、周期性边界下分数坐标一一对应, 兼容帧内
               原子顺序不同; 坐标须在容差内完全一致, 不做相似性匹配)
-使用方法:    python check_dup_xyz.py <文件A.xyz> [<文件B.xyz>]
+使用方法:    python check_dup_xyz.py <文件A.xyz> [<文件B.xyz> ...]
 参数:        -h/--help     显示本帮助
-输入文件:    <文件A.xyz>        待检测的第一个 xyz/extxyz 文件 (单文件: 检测
-                            内部重复; 双文件: 检测内部及文件间重复; 相对
-                            路径先按当前运行目录探测, 不存在再相对脚本
-                            所在目录解析)
-             <文件B.xyz>        待检测的第二个文件 (可选; 提供时进入双文件
-                            模式, 检测两个文件去重后的帧间重复)
+输入文件:    <文件A.xyz>        待检测的 xyz/extxyz 文件, 支持任意数量
+                            (1 个: 检测内部重复; 2+ 个: 先检测各文件
+                            内部重复, 再检测文件间重复, 按顺序合并
+                            去重; 相对路径先按当前运行目录探测, 不
+                            存在再相对脚本所在目录解析)
 输出文件:
-  <名>_dedup.xyz          去重后的结构 (有重复时生成)
-  merged_dedup.xyz        合并去重结构 (双文件模式: A 全部保留 + B 中
-                          不与 A 重复的帧)
+  <名>_dedup.xyz          去重后的结构 (有内部重复时生成)
+  merged_dedup.xyz        合并去重结构 (多文件模式: 第一个文件全部
+                          保留 + 后续文件中去掉与前面重复的帧)
   duplicate_frames.xyz    检测到的重复结构帧 (有重复时生成)
   check_dup.txt           重复检测报告 (分节明细: 标题/时间戳/各阶段/
                           末尾汇总, 覆盖写, 仅写文件名不含路径)
 输出路径:    脚本所在目录下的 check_dup/ 文件夹
 帧号约定:    OVITO 0 起始索引 (0 = 第一帧, 编辑器中第 n+1 帧)
 示例:
-  python check_dup_xyz.py ./A.xyz              # 单文件: 检测内部重复
-  python check_dup_xyz.py ./A.xyz ./B.xyz      # 双文件: 检测内部+文件间重复
+  python check_dup_xyz.py ./A.xyz                     # 单文件: 检测内部重复
+  python check_dup_xyz.py ./A.xyz ./B.xyz             # 双文件: 内部+文件间重复
+  python check_dup_xyz.py ./A.xyz ./B.xyz ./C.xyz     # 多文件: 按顺序合并去重
 依赖:        ase, numpy
 作者:        Hongbo Sun
 最后修改:    2026-08-24
@@ -185,22 +185,6 @@ def process_file(path, out_dir):
     return frames, keep, removed, mapping, out_path, dup_frames
 
 
-def find_cross_duplicates(keep_a, keep_b):
-    """严格检测两个去重列表之间的重复帧。
-
-    keep 元素为 (原始帧号, Atoms)。返回 [(A去重后帧号, B去重后帧号)]。
-    """
-    table = {}
-    for bi, (_, at) in enumerate(keep_b):
-        table.setdefault(fingerprint(at), []).append(bi)
-    pairs = []
-    for ai, (_, ata) in enumerate(keep_a):
-        for bi in table.get(fingerprint(ata), []):
-            if is_duplicate(ata, keep_b[bi][1]):
-                pairs.append((ai, bi))
-    return pairs
-
-
 def append_internal_lines(lines, removed):
     """向报告追加内部重复明细"""
     if not removed:
@@ -225,7 +209,7 @@ def print_usage():
 
 # ============================== 脚本工作区 =====================================
 def parse_args(argv):
-    """解析命令行参数: -h/--help 为选项, 其余为输入文件 (最多 2 个)。
+    """解析命令行参数: -h/--help 为选项, 其余为输入文件 (任意数量, 至少 1 个)。
     无参数时提示缺少必要参数 (帮助一律通过 -h/--help 获取)。"""
     files = []
     i = 0
@@ -249,16 +233,22 @@ def resolve_input_file(f, script_dir):
     return os.path.abspath(os.path.join(script_dir, f))
 
 
-def print_summary(file_a, frames_a, file_b, frames_b, removed_a, removed_b, pairs, out_dir):
-    """运行完毕后集中总结关键信息 (输入/重复统计/输出文件绝对路径)。"""
-    n_internal = len(removed_a) + (len(removed_b) if removed_b is not None else 0)
+def print_summary(infos, n_cross, merged_n, out_dir):
+    """运行完毕后集中总结关键信息 (输入/重复统计/输出文件绝对路径)。
+    infos: [(名字, 原始帧, keep, removed, 去重输出路径, 内部重复帧)]。"""
+    n_internal = sum(len(info[3]) for info in infos)
+    n_total = sum(len(info[1]) for info in infos)
     print("=" * 52)
     print("🎉 运行完成，总结:")
-    print(f"  输入文件:  {os.path.basename(file_a)} ({len(frames_a)} 帧)"
-          + (f" + {os.path.basename(file_b)} ({len(frames_b)} 帧)" if file_b else ""))
+    if len(infos) == 1:
+        print(f"  输入文件:  {infos[0][0]} ({n_total} 帧)")
+    else:
+        print(f"  输入文件:  {infos[0][0]} 等 {len(infos)} 个文件 (共 {n_total} 帧)")
     print(f"  重复统计:  内部 {n_internal} 处"
-          + (f", 文件间 {len(pairs)} 处" if file_b else "")
-          + f", 去除 {n_internal + (len(pairs) if file_b else 0)} 帧")
+          + (f", 文件间 {n_cross} 处" if len(infos) > 1 else "")
+          + f", 去除 {n_internal + n_cross} 帧")
+    if merged_n is not None:
+        print(f"  合并输出:  {merged_n} 帧 (merged_dedup.xyz)")
     print(f"  输出目录:  {os.path.abspath(out_dir)}")
     print(f"  报告文件:  {os.path.abspath(os.path.join(out_dir, REPORT_FILE))}")
     print("=" * 52)
@@ -267,11 +257,8 @@ def print_summary(file_a, frames_a, file_b, frames_b, removed_a, removed_b, pair
 def main():
     files = parse_args(sys.argv[1:])
     if not files:
-        print("❌ 错误: 未提供输入文件。用法: python check_dup_xyz.py <文件A.xyz> [<文件B.xyz>]")
+        print("❌ 错误: 未提供输入文件。用法: python check_dup_xyz.py <文件A.xyz> [<文件B.xyz> ...]")
         print("   (帮助请用 -h/--help)")
-        sys.exit(1)
-    if len(files) > 2:
-        print("❌ 错误: 最多支持两个输入文件。用法: python check_dup_xyz.py <文件A.xyz> [<文件B.xyz>]")
         sys.exit(1)
 
     # 输入文件: 先按当前运行目录探测, 不存在再相对脚本所在目录解析
@@ -286,128 +273,114 @@ def main():
     out_dir = os.path.join(SCRIPT_DIR, OUT_DIR)
     os.makedirs(out_dir, exist_ok=True)
 
-    if len(paths) == 1:
-        # ================= 单文件模式 =================
-        file_a = paths[0]
-        frames_a, keep, removed, mapping, out_path, dup_frames = process_file(file_a, out_dir)
-        if removed:
-            print(f"  ✅ 共去除 {len(removed)} 帧, 剩余 {len(keep)} 帧。")
+    # 1. 各文件内部去重: (名字, 原始帧, keep, removed, 去重输出路径, 内部重复帧)
+    infos = []
+    for i, p in enumerate(paths):
+        name = os.path.basename(p)
+        frames, keep, removed, _, out_path, dup_frames = process_file(p, out_dir)
+        infos.append((name, frames, keep, removed, out_path, dup_frames))
+        if i < len(paths) - 1:
+            print()
 
-        lines = [
-            "=" * 50,
-            "重复检测报告",
-            "=" * 50,
-            f"检测时间: {datetime.datetime.now():%Y-%m-%d %H:%M:%S}",
-            f"文件: {os.path.basename(file_a)} ({len(frames_a)} 帧)",
-            "",
-            "[内部重复]",
-        ]
-        append_internal_lines(lines, removed)
-        lines.append("")
-        lines.append("[输出文件]")
-        if out_path:
-            lines.append(f"  - {os.path.basename(out_path)} : 去重后结构 ({len(keep)} 帧)")
+    # 2. 文件间严格检测 (基于各文件去重后的帧): 后续文件与前面已保留帧比较
+    pool = {}   # 指纹 -> [(文件序号, 去重后帧号)] 已保留帧池
+    cross = []  # (被剔除: 文件序号, 去重后帧号, 与哪个文件的序号, 帧号)
+    for i, info in enumerate(infos):
+        keep_i = info[2]
+        if i == 0:
+            for di in range(len(keep_i)):
+                pool.setdefault(fingerprint(keep_i[di][1]), []).append((i, di))
+            continue
+        for di in range(len(keep_i)):
+            at = keep_i[di][1]
+            dup = next(((fi, ddi) for fi, ddi in pool.get(fingerprint(at), [])
+                        if is_duplicate(infos[fi][2][ddi][1], at)), None)
+            if dup is None:
+                pool.setdefault(fingerprint(at), []).append((i, di))
+            else:
+                cross.append((i, di, dup[0], dup[1]))
+
+    if len(infos) > 1:
+        print(f"🔍 严格检测 {len(infos)} 个文件去重后的帧之间是否重复 ...")
+        if not cross:
+            print("  ✅ 各文件去重后无帧间重复。")
         else:
-            lines.append("  - 无内部重复, 未生成去重文件")
-        if dup_frames:
-            dup_path = os.path.join(out_dir, DUP_FRAMES_FILE)
-            write(dup_path, dup_frames, format="extxyz")
-            lines.append(f"  - {DUP_FRAMES_FILE} : 重复结构帧 ({len(dup_frames)} 帧)")
-            print(f"  📦 已保存重复结构帧: {os.path.abspath(dup_path)} ({len(dup_frames)} 帧)")
-        # 末尾汇总统计 (报告文件分节结构的收尾)
-        lines.append("")
-        lines.append("=" * 50)
-        lines.append(f"汇总: 检测 {len(frames_a)} 帧, 发现 {len(removed)} 处内部重复, "
-                     f"已去除 {len(removed)} 帧, 保留 {len(keep)} 帧")
-        lines.append("=" * 50)
-        save_report(out_dir, lines)
-        print_summary(file_a, frames_a, None, None, removed, None, [], out_dir)
-        return
+            print(f"  ⚠️ 发现 {len(cross)} 处文件间重复 (OVITO 帧号, 0 起始):")
+            for i, di, fi, ddi in cross:
+                print(f"  📦 {infos[i][0]} 帧 {infos[i][2][di][0]} <-> "
+                      f"{infos[fi][0]} 帧 {infos[fi][2][ddi][0]} 重复 "
+                      f"(剔除 {infos[i][0]} 帧 {infos[i][2][di][0]})")
+            print(f"  ℹ️ 合并时已剔除后续文件中与前面文件重复的 {len(cross)} 帧 "
+                  f"(保留第一个文件 {infos[0][0]} 的帧)。")
 
-    # ================= 双文件模式 =================
-    file_a, file_b = paths
-    name_a = os.path.basename(file_a)
-    name_b = os.path.basename(file_b)
-    frames_a, keep_a, removed_a, _, out_a, dup_a = process_file(file_a, out_dir)
-    print()
-    frames_b, keep_b, removed_b, _, out_b, dup_b = process_file(file_b, out_dir)
+    # 3. 生成合并去重文件: 第一个文件全部 + 后续文件中不与前面重复的帧
+    merged = [at for _, at in infos[0][2]]
+    merged_n = None
+    if len(infos) > 1:
+        for i in range(1, len(infos)):
+            dropped = {di for (fi, di, _, _) in cross if fi == i}
+            merged += [at for di, (_, at) in enumerate(infos[i][2]) if di not in dropped]
+        merged_path = os.path.join(out_dir, "merged_dedup.xyz")
+        write(merged_path, merged, format="extxyz")
+        merged_n = len(merged)
+        print(f"  ✅ 已保存合并去重文件: {os.path.abspath(merged_path)} ({merged_n} 帧)")
 
-    # 文件之间严格检测 (基于各自去重后的帧)
-    print(f"\n🔍 严格检测 {name_a} 与 {name_b} 去重后的帧之间是否重复 ...")
-    pairs = find_cross_duplicates(keep_a, keep_b)
-    dup_b_set = set()
-    if not pairs:
-        print("  ✅ 两个文件去重后无重复帧。")
-    else:
-        print(f"  ⚠️ 发现 {len(pairs)} 处文件间重复 (OVITO 帧号, 0 起始):")
-        for ai, bi in pairs:
-            orig_a = keep_a[ai][0]
-            orig_b = keep_b[bi][0]
-            print(f"  📦 {name_a} 帧 {orig_a} <-> {name_b} 帧 {orig_b} 重复")
-            dup_b_set.add(bi)
-        print(f"  ℹ️ 合并时已剔除 {name_b} 中与 {name_a} 重复的 "
-              f"{len(dup_b_set)} 帧 (保留 {name_a} 的帧)。")
-
-    # 生成合并去重文件: A 全部 + B 中不与 A 重复的帧
-    merged = [at for _, at in keep_a]
-    merged += [at for bi, (_, at) in enumerate(keep_b) if bi not in dup_b_set]
-    merged_path = os.path.join(out_dir, "merged_dedup.xyz")
-    write(merged_path, merged, format="extxyz")
-    print(f"  ✅ 已保存合并去重文件: {os.path.abspath(merged_path)} ({len(merged)} 帧)")
-
-    # 收集所有重复结构帧: A 内部被去除 + B 内部被去除 + B 中与 A 重复被剔除
-    dup_frames = list(dup_a) + list(dup_b)
-    dup_frames += [keep_b[bi][1] for _, bi in pairs]
+    # 4. 收集所有重复结构帧: 各文件内部被去除 + 跨文件被剔除
+    dup_frames = []
+    for info in infos:
+        dup_frames += info[5]
+    dup_frames += [infos[i][2][di][1] for i, di, _, _ in cross]
     dup_path = None
     if dup_frames:
         dup_path = os.path.join(out_dir, DUP_FRAMES_FILE)
         write(dup_path, dup_frames, format="extxyz")
         print(f"  📦 已保存重复结构帧: {os.path.abspath(dup_path)} ({len(dup_frames)} 帧)")
 
-    # 检测报告 txt (仅写文件名, 不含路径)
+    # 5. 检测报告 txt (仅写文件名, 不含路径)
     lines = [
         "=" * 50,
         "重复检测报告",
         "=" * 50,
         f"检测时间: {datetime.datetime.now():%Y-%m-%d %H:%M:%S}",
-        f"文件A: {name_a} ({len(frames_a)} 帧)",
-        f"文件B: {name_b} ({len(frames_b)} 帧)",
-        "",
-        f"[{name_a} 内部重复]",
     ]
-    append_internal_lines(lines, removed_a)
-    lines.append("")
-    lines.append(f"[{name_b} 内部重复]")
-    append_internal_lines(lines, removed_b)
+    for i, info in enumerate(infos):
+        label = f"文件: {info[0]}" if len(infos) == 1 else f"文件{chr(65 + i)}: {info[0]}"
+        lines.append(f"{label} ({len(info[1])} 帧)")
+    for info in infos:
+        lines.append("")
+        lines.append(f"[{info[0]} 内部重复]")
+        append_internal_lines(lines, info[3])
     lines.append("")
     lines.append("[文件间重复 (去重后)]")
-    if not pairs:
+    if len(infos) == 1:
+        lines.append("  单文件模式, 无文件间比较。")
+    elif not cross:
         lines.append("  无重复帧。")
     else:
-        for ai, bi in pairs:
-            orig_a = keep_a[ai][0]
-            orig_b = keep_b[bi][0]
-            lines.append(f"  {name_a} 帧 {orig_a} <-> {name_b} 帧 {orig_b}")
-        lines.append(f"  合并时剔除 {name_b} 中与 {name_a} 重复的 "
-                     f"{len(dup_b_set)} 帧 (保留 {name_a} 的帧)")
+        for i, di, fi, ddi in cross:
+            lines.append(f"  {infos[i][0]} 帧 {infos[i][2][di][0]} <-> "
+                         f"{infos[fi][0]} 帧 {infos[fi][2][ddi][0]}")
+        lines.append(f"  合并时剔除后续文件中与前面文件重复的 {len(cross)} 帧 "
+                     f"(保留 {infos[0][0]} 的全部帧)")
     lines.append("")
     lines.append("[输出文件]")
-    if out_a:
-        lines.append(f"  - {os.path.basename(out_a)} : {name_a} 去重后结构 ({len(keep_a)} 帧)")
-    if out_b:
-        lines.append(f"  - {os.path.basename(out_b)} : {name_b} 去重后结构 ({len(keep_b)} 帧)")
-    lines.append(f"  - merged_dedup.xyz : {name_a}+{name_b} 合并去重 ({len(merged)} 帧)")
+    for info in infos:
+        if info[4]:
+            lines.append(f"  - {os.path.basename(info[4])} : {info[0]} 去重后结构 ({len(info[2])} 帧)")
+    if merged_n is not None:
+        lines.append(f"  - merged_dedup.xyz : {len(infos)} 个文件合并去重 ({merged_n} 帧)")
     if dup_path:
         lines.append(f"  - {DUP_FRAMES_FILE} : 重复结构帧 ({len(dup_frames)} 帧)")
     # 末尾汇总统计 (报告文件分节结构的收尾)
+    n_internal = sum(len(info[3]) for info in infos)
     lines.append("")
     lines.append("=" * 50)
-    lines.append(f"汇总: 共检测 {len(frames_a) + len(frames_b)} 帧, 内部重复 "
-                 f"{len(removed_a) + len(removed_b)} 处, 文件间重复 {len(pairs)} 处, "
-                 f"合并输出 {len(merged)} 帧")
+    lines.append(f"汇总: 共检测 {sum(len(info[1]) for info in infos)} 帧, "
+                 f"内部重复 {n_internal} 处, 文件间重复 {len(cross)} 处, "
+                 f"合并输出 {merged_n if merged_n is not None else len(infos[0][2])} 帧")
     lines.append("=" * 50)
     save_report(out_dir, lines)
-    print_summary(file_a, frames_a, file_b, frames_b, removed_a, removed_b, pairs, out_dir)
+    print_summary(infos, len(cross), merged_n, out_dir)
 
 
 # ============================== 脚本运行区 =====================================

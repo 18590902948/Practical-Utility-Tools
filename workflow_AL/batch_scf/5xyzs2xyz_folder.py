@@ -20,6 +20,10 @@ import os
 import sys
 import time
 
+# Windows 控制台默认 GBK 编码无法输出部分字符 (emoji 等)，统一切换 UTF-8
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
 
 def collect_files(folder):
     """返回文件夹内的 (xyz 文件列表, extxyz 文件列表)，均按文件名排序"""
@@ -36,9 +40,11 @@ def collect_files(folder):
 
 
 def count_frames(f):
-    """统计 xyz/extxyz 文件中的帧数（每帧首行第一列为正整数原子数）"""
+    """统计 xyz/extxyz 文件中的帧数（每帧首行第一列为正整数原子数）
+    UTF-8 读取并容错替换非法字节，避免 GBK 默认编码读含中文注释的
+    xyz 文件时崩溃"""
     n = 0
-    with open(f, "r") as fin:
+    with open(f, "r", encoding="utf-8", errors="replace") as fin:
         for line in fin:
             parts = line.split()
             if parts:
@@ -69,13 +75,14 @@ def resolve_folders(script_dir, args):
 
 
 def merge_files(file_list, out_file, buf_size=1024 * 1024):
-    """将多个文件按顺序拼接为一个文件（行为等价 cat）
-    自动检查每个文件末尾，缺换行符则补一个，防止帧粘连"""
-    with open(out_file, "w") as fout:
+    """将多个文件按顺序拼接为一个文件（行为等价 cat），统一 UTF-8/LF
+    输出；自动检查每个文件末尾，缺换行符则补一个，防止帧粘连。
+    读取容错替换非法字节，避免 GBK 默认编码读含中文注释的 xyz 崩溃"""
+    with open(out_file, "w", encoding="utf-8", newline="\n") as fout:
         for f in file_list:
             print(f"  处理 {f} ...", end=" ")
             last_chunk = ""
-            with open(f, "r") as fin:
+            with open(f, "r", encoding="utf-8", errors="replace") as fin:
                 while True:
                     chunk = fin.read(buf_size)
                     if not chunk:
@@ -105,11 +112,21 @@ def main():
         xyz_files, extxyz_files = collect_files(folder)
         d = os.path.basename(os.path.normpath(folder))
         for f in xyz_files:
+            n = count_frames(f)
+            if n == 0:
+                # 帧数为 0 说明不是有效的 xyz 文件 (如误传 txt/记录文件)，
+                # 直接拼入会污染输出，跳过并警告
+                print(f"⚠️ 警告: 文件不含有效 xyz 帧 (可能不是 xyz 文件)，已跳过: {f}")
+                continue
             groups["xyz"].append(f)
-            table.append((d, "xyz", count_frames(f)))
+            table.append((d, "xyz", n))
         for f in extxyz_files:
+            n = count_frames(f)
+            if n == 0:
+                print(f"⚠️ 警告: 文件不含有效 xyz 帧 (可能不是 xyz 文件)，已跳过: {f}")
+                continue
             groups["extxyz"].append(f)
-            table.append((d, "extxyz", count_frames(f)))
+            table.append((d, "extxyz", n))
 
     if not table:
         print("未找到含 xyz/extxyz 文件的文件夹！")
@@ -136,7 +153,8 @@ def main():
 
     # 追加写入合并记录日志（多次运行不覆盖历史记录）
     if output_lines:
-        with open(os.path.join(script_dir, "merged.txt"), "a") as fout:
+        with open(os.path.join(script_dir, "merged.txt"), "a",
+                  encoding="utf-8") as fout:
             fout.write("=" * 40 + "\n")
             fout.write(f"合并时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
             fout.write(f"输入文件 ({len(table)} 个):\n")

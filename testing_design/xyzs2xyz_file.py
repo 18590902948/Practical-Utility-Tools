@@ -308,8 +308,14 @@ def main():
         if fmt not in outputs_by_fmt:
             print(f"⚠️ 警告: 无 .{fmt} 格式的输出文件 (OUTPUT_FILES)，已跳过: {f}")
             continue
+        n = count_frames(f)
+        if n == 0:
+            # 帧数为 0 说明不是有效的 xyz 文件 (如误传 txt/记录文件)，
+            # 直接拼入会污染输出，跳过并警告
+            print(f"⚠️ 警告: 文件不含有效 xyz 帧 (可能不是 xyz 文件)，已跳过: {f}")
+            continue
         groups[fmt].append(f)
-        table.append((f, os.path.basename(f), fmt, count_frames(f)))
+        table.append((f, os.path.basename(f), fmt, n))
 
     if not table:
         print("❌ 错误: 没有与输出格式匹配的输入文件。")
