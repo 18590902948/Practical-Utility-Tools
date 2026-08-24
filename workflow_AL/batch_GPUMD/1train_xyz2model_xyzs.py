@@ -5,13 +5,18 @@
 分类:        主动学习工作流脚本 (结构抽取/转换类)
 功能:        从 NEP 训练目录的 train.xyz 中按指定帧号或随机抽取结构，每帧
              输出为 <outdir>/1_md<帧号>/model.xyz (主动学习 MD 初始结构)，
-             并为每个 1_md* 文件夹生成 sub_MD.sh 任务提交脚本。
-使用方法:    python train_xyz2model_xyzs.py [选项] 帧号 [帧号 ...]
-             python train_xyz2model_xyzs.py [选项] -ran <n>
+             并为每个 1_md* 文件夹生成 sub_MD.sh 任务提交脚本；可设置
+             复制 nep.in/nep.txt 等文件到各 1_md* 文件夹 (-n/--copy)。
+使用方法:    python train_xyz2model_xyzs.py [选项] [-ran <n> | -ext 帧号 ...]
 参数:        -o/--outdir DIR   输出根目录 (默认: 当前目录的父目录 ..)
+             -n/--copy 文件 ... 复制指定文件到每个 1_md* 文件夹 (如
+                            -n nep.txt nep_gen20000.txt；文件缺失时
+                            警告跳过；默认不复制，配置区 COPY_FILES
+                            可预设，命令行优先)
              -h/--help         显示帮助
-模式参数:    --extract/-ext   固定抽帧（默认）：提取指定帧号 [帧号 ...]
-             --random/-ran   随机抽帧：随机抽取 n 帧（用法：--random <n>）
+模式参数:    -ran/--random  随机抽帧（默认）：随机抽取 n 帧 (用法: -ran <n>，
+                             n 缺省时用默认 20；直接运行脚本名 = -ran 20)
+             -ext/--extract  固定抽帧：提取指定帧号 [帧号 ...] (单帧/多帧)
              (模式互斥，同时指定多个时报错；选项位置随意)
 输入文件:    train.xyz (extxyz 格式，从当前运行目录读取)
 输出文件:
@@ -23,10 +28,13 @@
              帧自动跳过，删除输出后下次自动重建；每次运行结束自动
              生成 sub_MD.sh 到所有 1_md* 文件夹 (run.in 需自备)
 示例:
-  python train_xyz2model_xyzs.py 5 9 66        # 固定抽帧 (默认)
-  python train_xyz2model_xyzs.py -ext 7        # 固定抽帧 (显式声明)
-  python train_xyz2model_xyzs.py -ran 3        # 随机抽帧
-  python train_xyz2model_xyzs.py -o /some/dir 2
+  python train_xyz2model_xyzs.py                        # 随机抽 20 帧 (默认)
+  python train_xyz2model_xyzs.py -ran 20                # 随机抽 20 帧
+  python train_xyz2model_xyzs.py -ran 20 -n nep.txt nep_gen20000.txt nep_gen10000.txt nep_gen5000.txt
+  python train_xyz2model_xyzs.py -ext 7                 # 固定抽帧 (单帧)
+  python train_xyz2model_xyzs.py -ext 7 5 65            # 固定抽帧 (多帧)
+  python train_xyz2model_xyzs.py -ext 7 5 65 -n nep.txt nep.in
+  python train_xyz2model_xyzs.py -o /some/dir 5 9 66    # 旧写法: 位置参数帧号
 作者:        Hongbo Sun
 最后修改日期: 2026-08-24
 =============================================================================
@@ -35,6 +43,7 @@
 import datetime
 import os
 import random
+import shutil
 import sys
 
 # ============================== 参数配置区 =====================================
@@ -46,6 +55,9 @@ OUTPUT_PATH      = ".."               # 输出根目录 (相对脚本所在目�
 MD_FOLDER_PREFIX = "1_md"             # 输出文件夹前缀 (如 1_md5)
 RECORD_FILE      = "extracted_model_xyz.txt"   # 记录文件 (帧号/原子数/路径/事件/状态，追加模式，脚本所在目录)
 RECORD_HEADER    = "# " + f"{'帧号':<20}{'原子数':<8}{'路径':<60}{'事件':<16}状态\n"
+DEFAULT_RANDOM_N = 20                            # 随机抽帧默认帧数 (直接运行脚本名 = -ran 20；-ran 缺省 n 时用此值)
+COPY_FILES       = []                            # 默认复制文件列表 (复制到每个 1_md* 文件夹，如 ["nep.in", "nep.txt",
+                                                 # "nep_gen20000.txt"]；留空 [] 表示不复制；-n/--copy 命令行优先)
 # =============================================================================
 # 提交脚本模板 (sub_MD.sh): 此变量的内容写入每个 MD 文件夹的 sub_MD.sh。
 # 按你的超算环境调整: 作业名 / 队列分区 / 资源限制 / 模块加载 / 运行命令。
@@ -108,12 +120,14 @@ def resolve_cmd_path(p):
 
 
 def parse_args(argv):
-    """解析选项: -o/--outdir、-h/--help、-ext/--extract、-ran/--random。
-    返回 (outdir, mode, rest)；mode: "extract"/"random"/None (默认固定抽帧)。
-    输入文件固定 (DEFAULT_INPUT)，无 -i 选项。"""
+    """解析选项: -o/--outdir、-n/--copy、-h/--help、-ext/--extract、
+    -ran/--random。返回 (outdir, mode, rest, copy_files)；mode:
+    "extract"/"random"/None (默认随机抽帧)。输入文件固定 (DEFAULT_INPUT)，
+    无 -i 选项。"""
     outdir = None
     mode = None
     rest = []
+    copy_files = None
     i = 0
     while i < len(argv):
         arg = argv[i]
@@ -123,27 +137,41 @@ def parse_args(argv):
                 sys.exit(1)
             outdir = resolve_cmd_path(argv[i + 1])
             i += 2
+        elif arg in ("-n", "--copy"):
+            # 收集 -n 后的文件列表，直到下一个选项或结束 (支持多文件)
+            copy_files = []
+            i += 1
+            while i < len(argv) and not argv[i].startswith("-"):
+                copy_files.append(argv[i])
+                i += 1
+            if not copy_files:
+                print("❌ 错误: 选项 -n/--copy 需要至少一个文件名。")
+                sys.exit(1)
         elif arg in ("-h", "--help"):
             print_usage()
             sys.exit(0)
         elif arg in ("-ext", "--extract"):
             if mode is not None:
                 print("❌ 错误: 模式选项互斥，只能指定一个模式 "
-                      "(--extract/-ext 或 --random/-ran)。")
+                      "(-ext/--extract 或 -ran/--random)。")
                 sys.exit(1)
             mode = "extract"
             i += 1
         elif arg in ("-ran", "--random"):
             if mode is not None:
                 print("❌ 错误: 模式选项互斥，只能指定一个模式 "
-                      "(--extract/-ext 或 --random/-ran)。")
+                      "(-ext/--extract 或 -ran/--random)。")
                 sys.exit(1)
             mode = "random"
             i += 1
+            # -ran 后可选跟 n (缺省时用 DEFAULT_RANDOM_N，等价 -ran 20)
+            if i < len(argv) and argv[i].isdigit():
+                rest.append(argv[i])
+                i += 1
         else:
             rest.append(arg)
             i += 1
-    return outdir, mode, rest
+    return outdir, mode, rest, copy_files
 
 
 def check_nep_training_dir():
@@ -321,15 +349,36 @@ def generate_submission_scripts(outdir):
         print(f"  📦 已生成 sub_MD.sh -> {os.path.abspath(dest)}")
 
 
+def copy_files_to_folders(outdir, file_names):
+    """将指定文件从 NEP 训练目录 (INPUT_PATH) 复制到输出根目录下所有
+    1_md* 文件夹 (与 sub_MD.sh 同步逻辑一致，保证各文件夹输入齐全)；
+    源文件缺失时警告跳过，不中断。"""
+    folders = sorted(
+        name for name in os.listdir(outdir)
+        if name.startswith(MD_FOLDER_PREFIX)
+        and os.path.isdir(os.path.join(outdir, name)))
+    if not folders:
+        print("⚠️ 警告: 输出根目录下未发现任何 1_md* 文件夹，跳过复制。")
+        return
+    missing = []
+    for name in file_names:
+        src = os.path.join(INPUT_PATH, name)
+        if not os.path.isfile(src):
+            missing.append(name)
+            continue
+        for folder in folders:
+            shutil.copy2(src, os.path.join(outdir, folder, name))
+        print(f"  📦 已复制 {name} -> {len(folders)} 个 1_md* 文件夹。")
+    if missing:
+        print(f"⚠️ 警告: 以下文件不存在，已跳过复制: {', '.join(missing)}")
+
+
 def main():
-    outdir, mode, rest = parse_args(sys.argv[1:])
+    outdir, mode, rest, copy_files = parse_args(sys.argv[1:])
 
     # 脚本默认在 NEP 训练目录中运行，先确认当前目录合法再继续
     check_nep_training_dir()
 
-    if not rest and mode is None:
-        print_usage()
-        sys.exit(0)
     if not rest and mode == "extract":
         print("❌ 用法: python train_xyz2model_xyzs.py -ext 帧号 [帧号 ...]")
         sys.exit(1)
@@ -337,14 +386,25 @@ def main():
     # 旧写法兼容: 位置参数 random 视为随机抽帧模式 (推荐改用 -ran/--random)
     if rest and rest[0] == "random":
         if mode == "extract":
-            print("❌ 错误: 模式选项互斥，不能同时使用 --extract/-ext "
+            print("❌ 错误: 模式选项互斥，不能同时使用 -ext/--extract "
                   "与位置参数 random。")
             sys.exit(1)
         if mode is None:
             print("ℹ️ 提示: 位置参数 random 是旧写法，建议改用 "
-                  "--random/-ran 选项。")
+                  "-ran/--random 选项。")
             mode = "random"
         rest = rest[1:]
+
+    # 旧写法兼容: 位置参数全为数字视为固定抽帧 (推荐改用 -ext/--extract)
+    if mode is None and rest and all(t.isdigit() for t in rest):
+        print("ℹ️ 提示: 位置参数帧号是旧写法，建议改用 -ext/--extract 选项。")
+        mode = "extract"
+
+    # 默认模式: 随机抽帧 DEFAULT_RANDOM_N 帧 (直接运行脚本名 = -ran 20)
+    if mode is None:
+        mode = "random"
+        print(f"ℹ️ 未指定模式，默认随机抽帧 {DEFAULT_RANDOM_N} 帧"
+              "(等价于 -ran 20)。")
 
     recorded = load_record()
     if recorded:
@@ -369,12 +429,17 @@ def main():
 
     extracted = []  # 本次实际抽取的 OVITO 帧号 (用于结尾总结)
     if mode == "random":
-        # 随机模式: --random/-ran <n> (旧写法 random <n> 兼容)
-        if len(rest) != 1 or not rest[0].isdigit():
+        # 随机模式: -ran/--random <n> (缺省 n 用 DEFAULT_RANDOM_N；
+        # 旧写法 random <n> 兼容)
+        if not rest:
+            n_pick = DEFAULT_RANDOM_N
+            print(f"ℹ️ 未指定抽取帧数，使用默认 {DEFAULT_RANDOM_N} 帧。")
+        elif len(rest) == 1 and rest[0].isdigit():
+            n_pick = int(rest[0])
+        else:
             print("❌ 用法: python train_xyz2model_xyzs.py -ran <n> "
                   "(随机抽取 n 帧)")
             sys.exit(1)
-        n_pick = int(rest[0])
         if n_pick < 1:
             print("❌ 错误: 抽取帧数必须 >= 1。")
             sys.exit(1)
@@ -402,13 +467,13 @@ def main():
         append_record(frames, picked, outdir, recorded)
         extracted = picked
     else:
-        # 固定抽帧模式 (默认): -ext/--extract 可省略
+        # 固定抽帧模式: -ext/--extract 帧号 [帧号 ...] (单帧/多帧)
         ovito_indices = []
         seen = set()
         for token in rest:
             if not token.isdigit():
                 print(f"❌ 错误: '{token}' 不是有效的帧号。"
-                      "用法: python train_xyz2model_xyzs.py [帧号 ...] "
+                      "用法: python train_xyz2model_xyzs.py -ext 帧号 [帧号 ...] "
                       "或 python train_xyz2model_xyzs.py -ran <n>")
                 sys.exit(1)
             idx = int(token)
@@ -456,12 +521,22 @@ def main():
     # 为所有 1_md* 文件夹生成任务提交脚本 (含本次新抽取的)
     generate_submission_scripts(outdir)
 
+    # 复制文件: -n/--copy 命令行优先，否则配置区 COPY_FILES (留空则不复制)
+    copy_list = copy_files if copy_files is not None else list(COPY_FILES)
+    if copy_list:
+        copy_files_to_folders(outdir, copy_list)
+    else:
+        print("ℹ️ 未指定复制文件 (配置区 COPY_FILES 为空且未用 -n/--copy)，"
+              "跳过复制。")
+
     # 运行结束集中总结关键信息 (规范: 处理数量/输出文件/记录文件)
     summary = (f"🎉 全部完成！本次抽取 {len(extracted)} 帧"
                + (f" (OVITO 帧号: {extracted})" if extracted else "") + "。")
     print(f"\n{summary}")
     print(f"   输出根目录: {outdir}")
     print(f"   记录文件: {os.path.abspath(RECORD_FILE)}")
+    if copy_list:
+        print(f"   复制文件: {copy_list} -> 各 1_md* 文件夹")
 
 
 # ============================== 脚本运行区 =====================================

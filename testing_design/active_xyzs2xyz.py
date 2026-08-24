@@ -21,9 +21,9 @@
                            声明；位置参数一律视为目标文件夹)
              -n/--name     输入文件名 (不指定默认 active.xyz，各目标文件夹
                            下同名文件)
-             --count/-c N  每个目标文件夹取不确定度最高的前 N 帧
+             -c/--count N   每个目标文件夹取不确定度最高的前 N 帧
                            (默认 15，配置区 TOP_N)
-             --minimum/-m 值  只保留 uncertainty >= 该值的帧 (可选，默认 0.3，
+             -m/--minimum 值  只保留 uncertainty >= 该值的帧 (可选，默认 0.3，
                            配置区 MIN_UNC)
              -o/--output   输出路径 (两种形式: 以 .xyz/.extxyz 结尾视为
                            输出文件完整路径，如 -o ./selected/f.xyz，否则

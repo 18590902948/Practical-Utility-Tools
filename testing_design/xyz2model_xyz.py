@@ -15,9 +15,9 @@ Citation: Z. Yan et al., GPUMDkit: A User-Friendly Toolkit for GPUMD and NEP,
                            支持通配符；命令行相对当前运行目录解析)
              -o/--outdir     输出根目录 (默认: 配置区 OUTPUT_PATH，脚本所在目录)
              -h/--help       显示本帮助
-模式参数:    --extract/-ext   固定抽帧（默认）：提取指定帧号 [帧号 ...]
-             --random/-ran   随机抽帧：随机抽取 n 帧（用法：--random <n>）
-             --all/-all      全帧抽取：抽取全部帧
+模式参数:    -ext/--extract  固定抽帧（默认）：提取指定帧号 [帧号 ...]
+             -ran/--random  随机抽帧：随机抽取 n 帧（用法：-ran <n>）
+             -all/--all     全帧抽取：抽取全部帧
              (模式互斥，同时指定多个时报错；选项位置随意)
 输入文件:    配置区 INPUT_FILES (默认 train.xyz，支持通配符)
 输出文件:    extracted_model_xyz.txt  (记录文件，表格形式，表头+5列，自动去重)
@@ -25,10 +25,10 @@ Citation: Z. Yan et al., GPUMDkit: A User-Friendly Toolkit for GPUMD and NEP,
 输出路径:    默认脚本所在目录 (OUTPUT_PATH)，可用 -o 指定 (相对/绝对路径均可)
 帧号约定:    OVITO 0 起始索引 (0 = 第一帧，编辑器中第 n+1 帧)
 示例:
-  python xyz2model_xyz.py test.xyz --extract 5 9 66
-  python xyz2model_xyz.py --extract 5 9 66   (不指定输入时用配置区 INPUT_FILES)
-  python xyz2model_xyz.py --random 3
-  python xyz2model_xyz.py --all
+  python xyz2model_xyz.py test.xyz -ext 5 9 66
+  python xyz2model_xyz.py -ext 5 9 66   (不指定输入时用配置区 INPUT_FILES)
+  python xyz2model_xyz.py -ran 3
+  python xyz2model_xyz.py -all
 作者:        Zihan YAN (yanzihan@westlake.edu.cn) (fork 自 train_xyz2model_xyz2.py)
 最后修改:    2026-08-24
 =============================================================================
@@ -73,7 +73,7 @@ def print_usage():
 
 def parse_args(argv):
     """解析命令行参数 (选项形式，位置随意): 输入文件为位置参数;
-    -h/--help、-o/--outdir、--extract/-ext、--random/-ran、--all/-all
+    -h/--help、-o/--outdir、-ext/--extract、-ran/--random、-all/--all
     为选项。返回 (输入文件名, 输出目录, 模式, 模式参数列表)。"""
     input_file = None
     outdir = None
@@ -104,7 +104,7 @@ def parse_args(argv):
             if mode is not None:
                 mode_conflict(mode, "random")
             if i + 1 >= len(argv) or not argv[i + 1].isdigit():
-                print("❌ 错误: --random/-ran 需要一个正整数 n (随机抽取 n 帧)。")
+                print("❌ 错误: -ran/--random 需要一个正整数 n (随机抽取 n 帧)。")
                 sys.exit(1)
             mode = "random"
             mode_args = [argv[i + 1]]
@@ -116,7 +116,7 @@ def parse_args(argv):
             i += 1
         elif arg.isdigit():
             print(f"❌ 错误: '{arg}' 不是有效参数。帧号请用选项形式指定:")
-            print("  用法: python xyz2model_xyz.py 输入xyz文件名 --extract 5 9")
+            print("  用法: python xyz2model_xyz.py 输入xyz文件名 -ext 5 9")
             sys.exit(1)
         elif input_file is None:
             input_file = arg
@@ -130,9 +130,9 @@ def parse_args(argv):
 
 def mode_conflict(existing, new):
     """模式选项互斥校验: 同时指定多个模式时报错退出。"""
-    names = {"extract": "--extract/-ext",
-             "random": "--random/-ran",
-             "all": "--all/-all"}
+    names = {"extract": "-ext/--extract",
+             "random": "-ran/--random",
+             "all": "-all/--all"}
     print(f"❌ 错误: 模式选项互斥，只能指定一个 "
           f"({names[existing]} 与 {names[new]} 冲突)。")
     sys.exit(1)
@@ -359,9 +359,9 @@ def main():
         print(f"ℹ️ 未指定输出根目录，使用脚本所在目录: {os.path.abspath(outdir)}")
     os.makedirs(outdir, exist_ok=True)
 
-    # 未指定模式选项 → 默认固定抽帧 (--extract)
+    # 未指定模式选项 → 默认固定抽帧 (-ext)
     if mode is None:
-        print("ℹ️ 未指定模式，默认固定抽帧 (--extract/-ext)。")
+        print("ℹ️ 未指定模式，默认固定抽帧 (-ext/--extract)。")
         mode = "extract"
 
     mode_name = {"extract": "固定抽帧", "random": "随机抽帧",
