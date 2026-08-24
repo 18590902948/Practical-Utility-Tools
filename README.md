@@ -14,7 +14,7 @@
 
 - [📁 项目结构](#-项目结构)
 - [💾 classic_data — 经典数据文件](#-classic_data--经典数据文件)
-- [⭐ perfect_design — 他人设计的优秀脚本](#-perfect_design--他人设计的优秀脚本)
+- [⭐ perfect_design — Zihan Yan 设计的优秀脚本](#-perfect_design--zihan-yan-设计的优秀脚本)
 - [🧪 testing_design — 自研 DFT 与机器学习脚本](#-testing_design--自研-dft-与机器学习脚本)
 - [🔬 workflow_AL — 主动学习工作流脚本](#-workflow_al--主动学习工作流脚本)
 - [🧫 AI_laboratory — 新脚本测试区](#-ai_laboratory--新脚本测试区)
@@ -28,7 +28,7 @@
 ```text
 Practical-Utility-Tools/
 ├── classic_data/        # 💾 经典数据文件（NEP 势模型、xyz 格式示例）
-├── perfect_design/      # ⭐ 他人编写的非常好用的脚本（格式转换、结构采样）
+├── perfect_design/      # ⭐ Zihan Yan 编写的非常好用的脚本（格式转换、结构采样）
 ├── testing_design/      # 🧪 自研 DFT / 机器学习脚本
 ├── workflow_AL/         # 🔬 主动学习工作流脚本
 ├── AI_laboratory/       # 🧫 新脚本测试文件夹
@@ -48,9 +48,9 @@ Practical-Utility-Tools/
 
 ---
 
-## ⭐ perfect_design — 他人设计的优秀脚本
+## ⭐ perfect_design — Zihan Yan 设计的优秀脚本
 
-收集了其他作者编写、经实际使用验证**非常好用**的脚本，主要用于 GPUMD / NEP 训练的数据准备与采样，每个子目录内均有详细的 README 说明。
+收集了 Zihan Yan 编写、经实际使用验证**非常好用**的脚本，主要用于 GPUMD / NEP 训练的数据准备与采样，每个子目录内均有详细的 README 说明。
 
 > **来源声明**：本目录内容取自 [GPUMDkit](https://github.com/zhyan0603/GPUMDkit.git)，作者为 **Zihan YAN**（yanzihan@westlake.edu.cn），原始仓库：[https://github.com/zhyan0603/GPUMDkit.git](https://github.com/zhyan0603/GPUMDkit.git)。使用及引用请遵循原作者的开源许可，并参阅 GPUMDkit 的引用说明。
 
