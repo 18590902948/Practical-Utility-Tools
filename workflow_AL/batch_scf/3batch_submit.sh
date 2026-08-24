@@ -8,14 +8,19 @@
 #              KPOINTS 可选)，不完整则跳过；按 MAX_TOTAL_JOBS 与 BATCH_SIZE
 #              控制提交速率，队列满员时指数退避轮询 (MIN_WAIT_SEC 起步，
 #              最长 MAX_WAIT_SEC)，有空位立即快速补位。
+#              自动后台运行：直接执行 ./3batch_submit.sh 等价于
+#              nohup ./3batch_submit.sh > submit.log 2>&1
 # 使用方法:    ./3batch_submit.sh
 # 参数:        无参数；BATCH_SIZE 等可改配置区
 # 运行环境:    需放在包含众多数字子文件夹 (如 1/、2/、...) 的任务父目录中
 #              运行；在 Slurm 登录节点执行
-# 输出:        终端实时打印提交进度；各任务目录的 %j.log 由 sub2.sh 生成
-# 防重复运行:  全部提交完成后生成完成标记 .batch_submit.done；此后再次运行
-#              会被拒绝 (第二次、第三次...均退出)，如需重新提交先手动删除
-#              标记文件 (rm .batch_submit.done)
+# 输出:
+#   submit.log            【批量脚本日志】3batch_submit.sh 自身运行日志，父目录仅生成一份
+#   各数字子任务目录生成 %j.log 【子任务日志】由 sub2.sh 的 --output=%j.log 生成
+# 防重复运行:  .batch_submit.lock 记录后台进程 PID，检测到已在运行直接拒绝
+#              (终端会提示查看/终止方式)；全部提交完成后生成完成标记
+#              .batch_submit.done，此后再次运行会被拒绝 (第二次、第三次...均
+#              退出)，如需重新提交先手动删除标记文件 (rm .batch_submit.done)
 # 作者:        Hongbo Sun
 # 最后修改日期: 2026-08-24
 # =============================================================================
@@ -28,24 +33,96 @@ MAX_WAIT_SEC=900    # 最长轮询间隔 (秒)：满员时指数退避上限 (=1
 DONE_FILE=".batch_submit.done"  # 完成标记文件 (全部提交完成后创建)
 # ==============================================
 
+# # 目录树示例:
+# # ============================================================================
+# # .
+# # ├── task_parent/              # 3batch_submit.sh 运行所在父目录
+# # │   ├── 1/                    # 单任务数字子文件夹
+# # │   │   ├── INCAR             # VASP 输入 (必需)
+# # │   │   ├── POSCAR
+# # │   │   ├── POTCAR
+# # │   │   ├── KPOINTS           # 可选
+# # │   │   ├── sub2.sh
+# # │   │   └── ${JOBID}.log      # 【子任务日志】sub2.sh 中 --output=%j.log 生成
+# # │   ├── 2/
+# # │   │   └── ...
+# # │   └── ...
+# # ├── 3batch_submit.sh
+# # └── submit.log                # 【批量脚本日志】3batch_submit.sh 自身 nohup 输出
+# # ============================================================================
+
+############## 新增：自动后台 nohup + 防重复运行逻辑 ##############
+LOCK_FILE="./.batch_submit.lock"
+
+# 判断是否已经进入 nohup 后台子进程
+if [[ ! "$NOHUP_INNER" == "1" ]]; then
+    # 检测是否已有正在运行的实例
+    if [ -f "$LOCK_FILE" ]; then
+        old_pid=$(cat "$LOCK_FILE")
+        if ps -p "$old_pid" > /dev/null 2>&1; then
+            echo "❌ 检测到脚本已在后台运行，PID: ${old_pid}"
+            echo "----------------------------------------"
+            echo "查看实时日志：tail -f submit.log"
+            echo "查看进程状态：ps aux | grep batch_submit.sh"
+            echo "终止后台脚本：kill -9 ${old_pid}"
+            echo "----------------------------------------"
+            exit 1
+        else
+            # lock 文件存在但进程已死亡，清理旧锁
+            rm -f "$LOCK_FILE"
+        fi
+    fi
+
+    export NOHUP_INNER=1
+    # readlink -f 解析绝对路径 + bash 显式调用，避免 $0 不带 ./ 时 nohup 在 PATH 中找不到脚本
+    nohup bash "$(readlink -f "$0")" "$@" > submit.log 2>&1 &
+    new_pid=$!
+    echo "${new_pid}" > "$LOCK_FILE"
+    echo "✅脚本已后台启动，日志输出到 submit.log"
+    echo "PID: ${new_pid}"
+    echo "----------------------------------------"
+    echo "查看实时日志：tail -f submit.log"
+    echo "查看进程状态：ps aux | grep batch_submit.sh"
+    echo "终止后台脚本：kill -9 ${new_pid}"
+    echo "----------------------------------------"
+    exit 0
+fi
+
+# ============ 后台进程（NOHUP_INNER=1）：日志开头输出与终端一致的启动提示 ============
+# $$ 即后台进程自身 PID，与前台终端打印的 new_pid 相同（bash 直接执行不 fork）
+if [[ "$NOHUP_INNER" == "1" ]]; then
+    echo "=========================================="
+    echo "✅脚本已后台启动，日志输出到 submit.log"
+    echo "PID: $$"
+    echo "----------------------------------------"
+    echo "查看实时日志：tail -f submit.log"
+    echo "查看进程状态：ps aux | grep batch_submit.sh"
+    echo "终止后台脚本：kill -9 $$"
+    echo "----------------------------------------"
+fi
+
+# 脚本正常退出时自动删除锁文件
+trap 'rm -f "$LOCK_FILE"' EXIT
+####################################################
+
 # ============ 环境准备区 ============
 # 依赖检查: sbatch 必须可用
 if ! command -v sbatch >/dev/null 2>&1; then
-    echo "❌ 错误: 未找到 sbatch 命令，请在 Slurm 登录节点运行。"
+    echo "❌ 错误：未找到 sbatch 命令，请在 Slurm 登录节点运行。"
     exit 1
 fi
 
 # 防重复运行: 已有完成标记则拒绝执行
 if [ -f "$DONE_FILE" ]; then
     echo "❌ 本脚本已完成批量提交，禁止重复运行。"
-    echo "如需重新提交，请先删除完成标记: rm $DONE_FILE"
+    echo "如需重新提交，请先删除完成标记：rm $DONE_FILE"
     exit 1
 fi
 
 # 前置校验: 当前目录必须存在数字命名的子任务文件夹
 if ! ls -d [0-9]*/ >/dev/null 2>&1; then
-    echo "❌ 错误: 当前目录未找到数字命名的子任务文件夹！"
-    echo "请将 3batch_submit.sh 放在任务父目录 (含 1/、2/、... 子文件夹) 中运行。"
+    echo "❌ 错误：当前目录未找到数字命名的子任务文件夹！"
+    echo "请将 3batch_submit.sh 放在任务父目录（含 1/、2/、... 子文件夹）中运行。"
     exit 1
 fi
 # ====================================
@@ -78,7 +155,7 @@ done
 task_list=($(printf '%s\n' "${task_list[@]}" | sort -n))
 
 total=${#task_list[@]}
-echo "无 log、待提交目录总数: $total"
+echo "无 log、待提交目录总数：$total"
 
 index=0
 first_batch=1   # 首次提交标记: 第一轮允许按 MAX_TOTAL_JOBS 全量提交
@@ -92,7 +169,7 @@ while [ $index -lt $total ]; do
 
     # 统计当前总任务数 (R+PD 全部算)
     total_jobs=$(squeue -u $USER -h | wc -l)
-    echo "当前总任务数: $total_jobs / $MAX_TOTAL_JOBS"
+    echo "当前总任务数：$total_jobs / $MAX_TOTAL_JOBS"
 
     # 队列满员: 指数退避等待
     if [ "$total_jobs" -ge "$MAX_TOTAL_JOBS" ]; then
@@ -114,7 +191,7 @@ while [ $index -lt $total ]; do
     # 队列有空位: 重置为最短间隔，及时抓住陆续出现的空位
     wait_seconds=$MIN_WAIT_SEC
 
-    echo "本轮最多可提交: $can_submit"
+    echo "本轮最多可提交：$can_submit"
     submitted=0
 
     while [ $submitted -lt $can_submit ] && [ $index -lt $total ]; do
@@ -123,11 +200,11 @@ while [ $index -lt $total ]; do
 
         # 提交前检测文件完整性，不完整则跳过
         if ! check_files "$dir"; then
-            echo "⚠️ 跳过: ${dir} 文件不完整 (需要 INCAR、POSCAR、POTCAR、*.sh，KPOINTS 可选)"
+            echo "⚠️ 跳过：${dir} 文件不完整（需要 INCAR、POSCAR、POTCAR、*.sh，KPOINTS 可选）"
             continue
         fi
 
-        echo "提交: $dir"
+        echo "提交：$dir"
         (cd "$dir" && sbatch sub2.sh)
         submitted=$((submitted + 1))
         sleep 1
@@ -138,7 +215,7 @@ while [ $index -lt $total ]; do
         first_batch=0
     fi
 
-    echo "本轮提交: $submitted 个，等待 ${wait_seconds} 秒后再次检查..."
+    echo "本轮提交：$submitted 个，等待 ${wait_seconds} 秒后再次检查..."
     sleep $wait_seconds
 done
 
