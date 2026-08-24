@@ -1,22 +1,24 @@
 #!/bin/bash
 # =============================================================================
 # 脚本:        3batch_submit.sh
-# 分类:        Slurm 批量作业提交脚本 (batch_scf 工作流第 3 步)
-# 功能:        扫描当前目录下所有数字命名子文件夹，筛选不存在 *.log 日志的
-#              任务目录，按数字从小到大顺序逐批 sbatch 提交 sub2.sh；每次
-#              提交前检测目录文件完整性 (INCAR、POSCAR、POTCAR、*.sh 必需，
-#              KPOINTS 可选)，不完整则跳过；按 MAX_TOTAL_JOBS 与 BATCH_SIZE
-#              控制提交速率，队列满员时指数退避轮询 (MIN_WAIT_SEC 起步，
-#              最长 MAX_WAIT_SEC)，有空位立即快速补位。
+# 分类:        Slurm 批量作业提交脚本 (batch_scf 工作流第 3 步；模式可配置复用)
+# 功能:        扫描当前目录下所有 FOLDER_PATTERN 匹配的任务文件夹 (默认
+#              [0-9]*，可改为 1_md* 用于 GPUMD 流程)，筛选不存在 *.log 日志
+#              的任务目录，按名称从小到大顺序逐批 sbatch 提交 JOB_SCRIPT
+#              匹配的脚本 (默认 sub_*.sh)；每次提交前检测目录文件完整性
+#              (INCAR、POSCAR、POTCAR、提交脚本必需，KPOINTS 可选)，不完整
+#              则跳过；按 MAX_TOTAL_JOBS 与 BATCH_SIZE 控制提交速率，队列
+#              满员时指数退避轮询 (MIN_WAIT_SEC 起步，最长 MAX_WAIT_SEC)，
+#              有空位立即快速补位。
 #              自动后台运行：直接执行 ./3batch_submit.sh 等价于
 #              nohup ./3batch_submit.sh > submit.log 2>&1
 # 使用方法:    ./3batch_submit.sh
 # 参数:        无参数；BATCH_SIZE 等可改配置区
-# 运行环境:    需放在包含众多数字子文件夹 (如 1/、2/、...) 的任务父目录中
+# 运行环境:    需放在包含众多任务子文件夹 (默认 1/、2/、...) 的父目录中
 #              运行；在 Slurm 登录节点执行
 # 输出:
 #   submit.log            【批量脚本日志】3batch_submit.sh 自身运行日志，父目录仅生成一份
-#   各数字子任务目录生成 %j.log 【子任务日志】由 sub2.sh 的 --output=%j.log 生成
+#   各任务子目录生成 %j.log 【子任务日志】由提交脚本的 --output=%j.log 生成
 # 防重复运行:  .batch_submit.lock 记录后台进程 PID，检测到已在运行直接拒绝
 #              (终端会提示查看/终止方式)；全部提交完成后生成完成标记
 #              .batch_submit.done，此后再次运行会被拒绝 (第二次、第三次...均
@@ -26,6 +28,8 @@
 # =============================================================================
 
 # ============ 配置区 (可按需调整) ============
+FOLDER_PATTERN="[0-9]*"  # 目标文件夹模式 (VASP: "[0-9]*"；GPUMD: "1_md*")
+JOB_SCRIPT="sub_*.sh"    # 各文件夹内的作业提交脚本 (VASP: sub2.sh；GPUMD: sub_MD.sh)
 BATCH_SIZE=9        # 每批最多提交数量
 MAX_TOTAL_JOBS=18   # 集群上允许的最大总任务数 (R+PD 全部算)
 MIN_WAIT_SEC=60     # 最短轮询间隔 (秒)：队列有空位时快速补位
@@ -119,16 +123,16 @@ if [ -f "$DONE_FILE" ]; then
     exit 1
 fi
 
-# 前置校验: 当前目录必须存在数字命名的子任务文件夹
-if ! ls -d [0-9]*/ >/dev/null 2>&1; then
-    echo "❌ 错误：当前目录未找到数字命名的子任务文件夹！"
-    echo "请将 3batch_submit.sh 放在任务父目录（含 1/、2/、... 子文件夹）中运行。"
+# 前置校验: 当前目录必须存在 FOLDER_PATTERN 匹配的任务文件夹
+if ! ls -d $FOLDER_PATTERN/ >/dev/null 2>&1; then
+    echo "❌ 错误：当前目录未找到 $FOLDER_PATTERN 文件夹！"
+    echo "请将 3batch_submit.sh 放在任务父目录（含 $FOLDER_PATTERN 子文件夹）中运行。"
     exit 1
 fi
 # ====================================
 
 # ============ 函数配置区 ============
-# 检查任务目录文件是否完整: INCAR、POSCAR、POTCAR、*.sh 必需，KPOINTS 可选
+# 检查任务目录文件是否完整: INCAR、POSCAR、POTCAR 必需，提交脚本 (JOB_SCRIPT 通配) 需存在，KPOINTS 可选
 check_files() {
     local dir="$1"
     for f in INCAR POSCAR POTCAR; do
@@ -136,7 +140,7 @@ check_files() {
             return 1
         fi
     done
-    if ! ls "${dir}"/*.sh >/dev/null 2>&1; then
+    if ! ls "${dir}"/$JOB_SCRIPT >/dev/null 2>&1; then
         return 1
     fi
     return 0
@@ -144,15 +148,15 @@ check_files() {
 # ====================================
 
 # ============ 主流程 ============
-# 收集无 log 的任务目录并排序
+# 收集无 log 的任务目录并按名称排序
 task_list=()
-for dir in [0-9]*/; do
+for dir in $FOLDER_PATTERN/; do
     [ -d "$dir" ] || continue
     if ! ls "${dir}"*.log >/dev/null 2>&1; then
         task_list+=("${dir%/}")
     fi
 done
-task_list=($(printf '%s\n' "${task_list[@]}" | sort -n))
+task_list=($(printf '%s\n' "${task_list[@]}" | sort -V))
 
 total=${#task_list[@]}
 echo "无 log、待提交目录总数：$total"
@@ -200,12 +204,13 @@ while [ $index -lt $total ]; do
 
         # 提交前检测文件完整性，不完整则跳过
         if ! check_files "$dir"; then
-            echo "⚠️ 跳过：${dir} 文件不完整（需要 INCAR、POSCAR、POTCAR、*.sh，KPOINTS 可选）"
+            echo "⚠️ 跳过：${dir} 文件不完整（需要 INCAR、POSCAR、POTCAR、$JOB_SCRIPT，KPOINTS 可选）"
             continue
         fi
 
         echo "提交：$dir"
-        (cd "$dir" && sbatch sub2.sh)
+        # JOB_SCRIPT 为通配符，不加引号以展开实际脚本名 (sub2.sh / sub_MD.sh)
+        (cd "$dir" && sbatch $JOB_SCRIPT)
         submitted=$((submitted + 1))
         sleep 1
     done
