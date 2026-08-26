@@ -24,7 +24,7 @@
   python xsd2xyz.py ./H/H.xsd
   python xsd2xyz.py ./H/H.xsd -o ./out/model.xyz
   python xsd2xyz.py *.xsd -o ./out
-作者:        Hongbo Sun
+作者:        隼蝶.
 最后修改日期: 2026-08-26
 =============================================================================
 # 目录树示例:

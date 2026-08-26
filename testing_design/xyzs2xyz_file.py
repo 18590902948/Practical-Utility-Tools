@@ -33,7 +33,7 @@
   python xyzs2xyz_file.py -t ./a.xyz ./b.xyz -o ./C/c.xyz
   python xyzs2xyz_file.py './A/*.xyz' -o ./C/c.xyz
   python xyzs2xyz_file.py ./A/a.xyz ./B/b.xyz -o ./C/c.xyz
-作者:        Hongbo Sun
+作者:        隼蝶.
 最后修改:    2026-08-24
 =============================================================================
 """

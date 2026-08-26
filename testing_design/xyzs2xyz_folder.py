@@ -39,7 +39,7 @@
   python xyzs2xyz_folder.py -t ./A ./B ./C -n a.xyz -o ./D/E/f.xyz
   python xyzs2xyz_folder.py './1_md*' -o ./D/E/f.xyz
   python xyzs2xyz_folder.py ./A ./B -o ./C/c.xyz
-作者:        Hongbo Sun
+作者:        隼蝶.
 最后修改:    2026-08-24
 =============================================================================
 """

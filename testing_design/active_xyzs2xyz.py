@@ -44,7 +44,7 @@
   python active_xyzs2xyz.py
   python active_xyzs2xyz.py -t ./1_md712 ./1_md2379 -c 20 -o ./selected/f.xyz
   python active_xyzs2xyz.py './1_md*' -m 0.2 -o ./selected_from_active/
-作者:        Hongbo Sun
+作者:        隼蝶.
 最后修改:    2026-08-24
 =============================================================================
 """

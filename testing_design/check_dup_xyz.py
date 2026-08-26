@@ -26,7 +26,7 @@
   python check_dup_xyz.py ./A.xyz ./B.xyz             # 双文件: 内部+文件间重复
   python check_dup_xyz.py ./A.xyz ./B.xyz ./C.xyz     # 多文件: 按顺序合并去重
 依赖:        ase, numpy
-作者:        Hongbo Sun
+作者:        隼蝶.
 最后修改:    2026-08-24
 =============================================================================
 """

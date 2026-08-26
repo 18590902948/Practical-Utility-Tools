@@ -35,7 +35,7 @@
   python dump_xyzs2xyz4clean.py
   python dump_xyzs2xyz4clean.py -t ./dir1 ./dir2 -s energy -o ./A/a.xyz
   python dump_xyzs2xyz4clean.py './1_md*' -s energy -o ./A/a.xyz
-作者:        Hongbo Sun
+作者:        隼蝶.
 最后修改:    2026-08-24
 =============================================================================
 """

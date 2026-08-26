@@ -40,7 +40,7 @@
   python train_xyz2model_xyzs.py -ext 7 5 65            # 固定抽帧 (多帧)
   python train_xyz2model_xyzs.py -ext 7 5 65 -n nep.txt nep.in
   python train_xyz2model_xyzs.py -o /some/dir 5 9 66    # 旧写法: 位置参数帧号
-作者:        Hongbo Sun
+作者:        隼蝶.
 最后修改日期: 2026-08-26
 =============================================================================
 """

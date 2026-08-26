@@ -25,7 +25,7 @@
   python clean_xyz.py ./A/a.xyz ./B/b.xyz -o ./C/
   python clean_xyz.py ./A/a.xyz -o ./D/e.xyz
   (不指定输入文件时用配置区 INPUT_FILES，清洗脚本所在目录下所有文件)
-作者:        Hongbo Sun (fork 自 Zihan YAN 的 GPUMDkit clean_xyz.py)
+作者:        隼蝶. (fork 自 Zihan YAN 的 GPUMDkit clean_xyz.py)
 最后修改:    2026-08-24
 =============================================================================
 """
