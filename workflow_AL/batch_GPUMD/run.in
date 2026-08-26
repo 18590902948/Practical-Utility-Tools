@@ -26,37 +26,3 @@ dump_xyz     -1 1 1000 dump.xyz
 dump_restart 10000
 run          50000
 
-ensemble     nvt_nhc 1200 1200 100
-active       10 1 1 1 0.1
-dump_thermo  100
-dump_xyz     -1 1 1000 dump.xyz
-dump_restart 10000
-run          20000
-
-ensemble     nvt_nhc 900 900 100
-active       10 1 1 1 0.1
-dump_thermo  100
-dump_xyz     -1 1 1000 dump.xyz
-dump_restart 10000
-run          50000
-
-ensemble     nvt_nhc 600 600 100
-active       10 1 1 1 0.05
-dump_thermo  100
-dump_xyz     -1 1 1000 dump.xyz
-dump_restart 10000
-run          20000
-
-ensemble     nvt_nhc 300 300 100
-active       10 1 1 1 0.05
-dump_thermo  100
-dump_xyz     -1 1 1000 dump.xyz
-dump_restart 10000
-run          20000
-
-ensemble     nvt_nhc 300 300 100
-active       10 1 1 1 0.05
-dump_thermo  100
-dump_xyz     -1 1 1000 dump.xyz
-dump_restart 10000
-run          100000
