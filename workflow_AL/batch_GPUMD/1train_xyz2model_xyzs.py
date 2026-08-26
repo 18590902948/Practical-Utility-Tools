@@ -7,15 +7,19 @@
              输出为 <outdir>/1_md<帧号>/model.xyz (主动学习 MD 初始结构)，
              并为每个 1_md* 文件夹生成 sub_MD.sh 任务提交脚本；可设置
              复制 nep.in/nep.txt 等文件到各 1_md* 文件夹 (-n/--copy)。
-使用方法:    python train_xyz2model_xyzs.py [选项] [-ran <n> | -ext 帧号 ...]
+使用方法:    python train_xyz2model_xyzs.py [选项] [-ran <n> [-sco 起始 结束] | -ext 帧号 ...]
 参数:        -o/--outdir DIR   输出根目录 (默认: 当前目录的父目录 ..)
              -n/--copy 文件 ... 复制指定文件到每个 1_md* 文件夹 (如
                             -n nep.txt nep_gen20000.txt；文件缺失时
                             警告跳过；默认不复制，配置区 COPY_FILES
                             可预设，命令行优先)
+             -sco/--scope 起始 结束  随机抽帧范围 (仅随机模式): 只在
+                            train.xyz 的 OVITO 帧 [起始, 结束] 区间内
+                            随机抽帧 (含两端)；范围越界或起止倒置时报错
              -h/--help         显示帮助
 模式参数:    -ran/--random  随机抽帧（默认）：随机抽取 n 帧 (用法: -ran <n>，
-                             n 缺省时用默认 20；直接运行脚本名 = -ran 20)
+                             n 缺省时用默认 20；直接运行脚本名 = -ran 20；
+                             可搭配 -sco/--scope 限定随机范围)
              -ext/--extract  固定抽帧：提取指定帧号 [帧号 ...] (单帧/多帧)
              (模式互斥，同时指定多个时报错；选项位置随意)
 输入文件:    train.xyz (extxyz 格式，从当前运行目录读取)
@@ -30,13 +34,14 @@
 示例:
   python train_xyz2model_xyzs.py                        # 随机抽 20 帧 (默认)
   python train_xyz2model_xyzs.py -ran 20                # 随机抽 20 帧
+  python train_xyz2model_xyzs.py -ran 20 -sco 50 100    # 从第 50~100 帧随机抽 20 帧
   python train_xyz2model_xyzs.py -ran 20 -n nep.txt nep_gen20000.txt nep_gen10000.txt nep_gen5000.txt
   python train_xyz2model_xyzs.py -ext 7                 # 固定抽帧 (单帧)
   python train_xyz2model_xyzs.py -ext 7 5 65            # 固定抽帧 (多帧)
   python train_xyz2model_xyzs.py -ext 7 5 65 -n nep.txt nep.in
   python train_xyz2model_xyzs.py -o /some/dir 5 9 66    # 旧写法: 位置参数帧号
 作者:        Hongbo Sun
-最后修改日期: 2026-08-24
+最后修改日期: 2026-08-26
 =============================================================================
 """
 
@@ -120,14 +125,16 @@ def resolve_cmd_path(p):
 
 
 def parse_args(argv):
-    """解析选项: -o/--outdir、-n/--copy、-h/--help、-ext/--extract、
-    -ran/--random。返回 (outdir, mode, rest, copy_files)；mode:
-    "extract"/"random"/None (默认随机抽帧)。输入文件固定 (DEFAULT_INPUT)，
+    """解析选项: -o/--outdir、-n/--copy、-sco/--scope、-h/--help、
+    -ext/--extract、-ran/--random。返回 (outdir, mode, rest, copy_files,
+    scope)；mode: "extract"/"random"/None (默认随机抽帧)；scope:
+    [起始, 结束] 字符串列表或 None。输入文件固定 (DEFAULT_INPUT)，
     无 -i 选项。"""
     outdir = None
     mode = None
     rest = []
     copy_files = None
+    scope = None
     i = 0
     while i < len(argv):
         arg = argv[i]
@@ -146,6 +153,20 @@ def parse_args(argv):
                 i += 1
             if not copy_files:
                 print("❌ 错误: 选项 -n/--copy 需要至少一个文件名。")
+                sys.exit(1)
+        elif arg in ("-sco", "--scope"):
+            # 收集 -sco 后的起始/结束帧号 (仅随机模式，互斥检查在 main)
+            if scope is not None:
+                print("❌ 错误: 选项 -sco/--scope 只能指定一次。")
+                sys.exit(1)
+            scope = []
+            i += 1
+            while i < len(argv) and not argv[i].startswith("-"):
+                scope.append(argv[i])
+                i += 1
+            if len(scope) != 2:
+                print("❌ 错误: 选项 -sco/--scope 需要两个帧号 "
+                      "(起始 结束)，如 -sco 50 100。")
                 sys.exit(1)
         elif arg in ("-h", "--help"):
             print_usage()
@@ -171,7 +192,7 @@ def parse_args(argv):
         else:
             rest.append(arg)
             i += 1
-    return outdir, mode, rest, copy_files
+    return outdir, mode, rest, copy_files, scope
 
 
 def check_nep_training_dir():
@@ -374,7 +395,7 @@ def copy_files_to_folders(outdir, file_names):
 
 
 def main():
-    outdir, mode, rest, copy_files = parse_args(sys.argv[1:])
+    outdir, mode, rest, copy_files, scope = parse_args(sys.argv[1:])
 
     # 脚本默认在 NEP 训练目录中运行，先确认当前目录合法再继续
     check_nep_training_dir()
@@ -406,6 +427,12 @@ def main():
         print(f"ℹ️ 未指定模式，默认随机抽帧 {DEFAULT_RANDOM_N} 帧"
               "(等价于 -ran 20)。")
 
+    # -sco/--scope 仅适用于随机抽帧模式
+    if scope is not None and mode != "random":
+        print("❌ 错误: -sco/--scope 仅适用于随机抽帧模式 "
+              "(-ran/--random)。")
+        sys.exit(1)
+
     recorded = load_record()
     if recorded:
         print(f"ℹ️ 记录文件 {os.path.abspath(RECORD_FILE)} "
@@ -430,7 +457,7 @@ def main():
     extracted = []  # 本次实际抽取的 OVITO 帧号 (用于结尾总结)
     if mode == "random":
         # 随机模式: -ran/--random <n> (缺省 n 用 DEFAULT_RANDOM_N；
-        # 旧写法 random <n> 兼容)
+        # 旧写法 random <n> 兼容)；-sco/--scope 起始 结束 限定随机范围
         if not rest:
             n_pick = DEFAULT_RANDOM_N
             print(f"ℹ️ 未指定抽取帧数，使用默认 {DEFAULT_RANDOM_N} 帧。")
@@ -443,15 +470,41 @@ def main():
         if n_pick < 1:
             print("❌ 错误: 抽取帧数必须 >= 1。")
             sys.exit(1)
-        if n_pick > nframes:
-            print(f"❌ 错误: 无法抽取 {n_pick} 帧: "
-                  f"{os.path.abspath(input_path)} "
-                  f"仅包含 {nframes} 帧。")
+        # 随机抽取范围: -sco/--scope 起始 结束 (OVITO 0 起始索引，含两端)
+        if scope is not None:
+            start, end = scope
+            if not (start.isdigit() and end.isdigit()):
+                print("❌ 错误: -sco/--scope 的参数必须是帧号数字 "
+                      "(用法: -sco 起始 结束)。")
+                sys.exit(1)
+            start, end = int(start), int(end)
+            if start > end:
+                print(f"❌ 错误: -sco/--scope 起始帧 {start} "
+                      f"大于结束帧 {end}。")
+                sys.exit(1)
+            if end >= nframes:
+                print(f"❌ 错误: -sco/--scope 范围 [{start}, {end}] "
+                      f"超出 {DEFAULT_INPUT} 的有效帧范围 "
+                      f"[0, {nframes - 1}] (共 {nframes} 帧)。")
+                sys.exit(1)
+            pool = list(range(start, end + 1))
+            print(f"ℹ️ 随机抽取范围: OVITO 帧 [{start}, {end}] "
+                  f"(共 {len(pool)} 帧，含两端)。")
+        else:
+            pool = list(range(nframes))
+        if n_pick > len(pool):
+            if scope is not None:
+                print(f"❌ 错误: 无法抽取 {n_pick} 帧: "
+                      f"范围 [{start}, {end}] 仅包含 {len(pool)} 帧。")
+            else:
+                print(f"❌ 错误: 无法抽取 {n_pick} 帧: "
+                      f"{os.path.abspath(input_path)} "
+                      f"仅包含 {len(pool)} 帧。")
             sys.exit(1)
         # 排除已记录且输出完整的帧 (文件夹与 model.xyz 均存在)
-        available = [i for i in range(nframes)
+        available = [i for i in pool
                      if frame_available(i, recorded, outdir)]
-        skipped = [i for i in range(nframes)
+        skipped = [i for i in pool
                    if not frame_available(i, recorded, outdir)]
         if skipped:
             print(f"ℹ️ 已排除 {len(skipped)} 个抽取过的帧 "
