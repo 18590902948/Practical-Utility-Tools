@@ -43,12 +43,14 @@
 # ├── quick_cp.py
 # ├── INCAR                <- 传递文件
 # ├── 1/ 2/ 3/             <- 数字序列组（靶文件夹）
-# ├── frame_1/ frame_2/    <- 通配符模式组 frame_*（靶文件夹）
+# ├── frame_1/ frame_2/    <- 单变量模式组 frame_{N}（靶文件夹）
+# ├── 10_10/ 5_5/          <- 对称多段模式组 {N}_{N}（靶文件夹）
 # ├── raw_data/            <- 传递文件夹（无规律）
 # └── __pycache__/         <- 自动排除
 # ============================================================================
 """
 import glob
+import itertools
 import os
 import re
 import shutil
@@ -324,10 +326,11 @@ def find_number_group(folders):
 
 
 def find_letter_groups(folders):
-    """字母序列组：纯字母文件夹按连续段分组（大小写分别处理，每段>=MIN_GROUP_SIZE）"""
+    """字母序列组：单字母文件夹（如 a、A）按连续段分组（大小写分别处理，每段>=MIN_GROUP_SIZE）；
+    多字母纯字母文件夹（如 md、data）不做连续判定，交由模式组处理"""
     groups = []
-    for seq in (sorted(f for f in folders if f.isalpha() and f.islower()),
-                sorted(f for f in folders if f.isalpha() and f.isupper())):
+    for seq in (sorted(f for f in folders if f.isalpha() and f.islower() and len(f) == 1),
+                sorted(f for f in folders if f.isalpha() and f.isupper() and len(f) == 1)):
         if not seq:
             continue
         start = 0
@@ -341,33 +344,143 @@ def find_letter_groups(folders):
     return groups
 
 
-def find_wildcard_groups(folders):
-    """通配符模式组：对剩余文件夹提取共享"前缀+后缀"的模式。
+def parse_name(name):
+    """解析文件夹名为段序列：连续数字→num段，连续字母→alpha段，其余字符→fixed段；
+    固定段含 glob 特殊字符（*?[]）时返回空列表（不参与模式识别）"""
+    segments = []
+    for s in re.findall(r"\d+|[A-Za-z]+|[^0-9A-Za-z]+", name):
+        if s.isdigit():
+            segments.append(("num", s))
+        elif s.isalpha():
+            segments.append(("alpha", s))
+        elif any(c in s for c in "*?[]"):
+            return []
+        else:
+            segments.append(("fixed", s))
+    return segments
 
-    规则: 名称中任意连续数字/字母段视为变量部分，按（前缀, 后缀）聚合，
-    组内成员数 >= MIN_GROUP_SIZE 且 glob 反向验证通过（模式匹配到的目录
-    恰好等于组内成员，防止误伤其他文件夹）才构成规律组。
-    """
-    table = {}  # (prefix, suffix) -> [name, ...]
+
+def enum_patterns(segments):
+    """枚举变量段子集（num/alpha 段为候选变量），生成 (pattern, var_kinds, var_values)；
+    变量段数 <=4 全枚举，>4 仅枚举单段与全段（最多 16 个候选）"""
+    var_idx = [i for i, (kind, _) in enumerate(segments) if kind != "fixed"]
+    k = len(var_idx)
+    if k == 0:
+        return []
+    if k <= 4:
+        subsets = [c for r in range(1, k + 1)
+                   for c in itertools.combinations(range(k), r)]
+    else:
+        subsets = [(i,) for i in range(k)] + [tuple(range(k))]
+    results = []
+    for sub in subsets:
+        var_pos = {var_idx[i] for i in sub}
+        var_kinds = tuple(segments[i][0] for i in sorted(var_pos))
+        var_values = tuple(segments[i][1] for i in sorted(var_pos))
+        pattern = "".join("*" if i in var_pos else v
+                          for i, (_, v) in enumerate(segments))
+        results.append((pattern, var_kinds, var_values))
+    return results
+
+
+def is_arith_seq(col):
+    """列取值构成等差数列（数字，步长一致非零）或连续字母序列"""
+    col = list(col)
+    if len(col) < 2:
+        return False
+    if all(v.isdigit() for v in col):
+        nums = [int(v) for v in col]
+        step = nums[1] - nums[0]
+        return step != 0 and all(nums[i] - nums[i - 1] == step
+                                 for i in range(2, len(nums)))
+    if all(len(v) == 1 and v.isalpha() for v in col):
+        steps = [ord(col[i]) - ord(col[i - 1]) for i in range(1, len(col))]
+        return steps[0] != 0 and len(set(steps)) == 1
+    return False
+
+
+def build_display(pattern, var_kinds):
+    """可读模式：按变量段顺序把 * 替换为 {N}（数字）/{A}（字母）"""
+    out, it = [], iter(var_kinds)
+    for ch in pattern:
+        if ch == "*":
+            out.append("{N}" if next(it) == "num" else "{A}")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def classify_group(entries, pattern, var_kinds):
+    """判定聚合组类型（strength: 对称3 > 有序2 > 普通1），返回 (strength, 可读模式, 合格成员) 或 None。
+    对称组自动剔除段间不相等的异常成员（如 10_10..24_24 中混入的 5_10），
+    剩余成员数 >= MIN_GROUP_SIZE 即成立"""
+    if len(entries) < MIN_GROUP_SIZE:
+        return None
+    n_var = len(var_kinds)
+    if n_var == 0:
+        return None
+    if n_var >= 2 and len(set(var_kinds)) == 1:
+        ok = [e for e in entries if len(set(e[1])) == 1]
+        if len(ok) >= MIN_GROUP_SIZE:
+            return 3, build_display(pattern, var_kinds), ok     # 对称模式: 10_10、5x5、a_a
+    if n_var >= 2 and all(is_arith_seq(col) for col in zip(*[v for _, v in entries])):
+        return 2, build_display(pattern, var_kinds), entries    # 有序模式: 各列等差/连续
+    if n_var == 1:
+        return 1, build_display(pattern, var_kinds), entries    # 单变量模式: frame_1、1_md
+    return None                                                  # 多变量无约束，不成规律
+
+
+def verify_glob(pattern, members):
+    """外来者检查：pattern 在脚本目录匹配到的文件夹恰好等于组内成员"""
+    matched = {os.path.basename(p) for p in glob.glob(os.path.join(SCRIPT_DIR, pattern))
+               if os.path.isdir(p)}
+    return bool(matched) and matched == set(members)
+
+
+def sort_pattern_members(entries, var_kinds, strength):
+    """组内成员排序：对称/有序组按首变量段数值/字母序，其余按字母序"""
+    if strength >= 2 and var_kinds:
+        def key(e):
+            v = e[1][0]
+            return (0, int(v)) if v.isdigit() else (1, v)
+        return [e[0] for e in sorted(entries, key=key)]
+    return sorted(e[0] for e in entries)
+
+
+def find_pattern_groups(folders):
+    """多段规律模式组：解析名称→枚举变量子集→聚合→分类。
+    按 (强度, 成员数, 固定部分长度) 优先级处理并用 used 去重；
+    普通模式组须通过 glob 外来者检查；
+    返回 [(strength, 可读模式, [成员名,...]), ...]"""
+    table = {}  # (pattern, var_kinds) -> [(名称, 变量值元组), ...]
     for name in folders:
-        for m in re.finditer(r"\d+|[A-Za-z]+", name):
-            key = (name[:m.start()], name[m.end():])
-            table.setdefault(key, []).append(name)
-
-    result = []
-    used = set()
-    # 按成员数降序、通配符长度升序处理，保证每组文件夹只归属一个模式
-    for (prefix, suffix), members in sorted(
-            table.items(), key=lambda kv: (-len(kv[1]), len(kv[0]) + len(kv[1]))):
-        new_members = [m for m in members if m not in used]
-        if len(new_members) < MIN_GROUP_SIZE:
+        segs = parse_name(name)
+        if not segs:
             continue
-        pattern = prefix + "*" + suffix
-        matched = {os.path.basename(p) for p in glob.glob(os.path.join(SCRIPT_DIR, pattern))
-                   if os.path.isdir(p)}
-        if matched and matched == set(new_members):
-            result.append((pattern, sorted(new_members)))
-            used.update(new_members)
+        for pattern, var_kinds, var_values in enum_patterns(segs):
+            table.setdefault((pattern, var_kinds), []).append((name, var_values))
+
+    candidates = []
+    for (pattern, var_kinds), entries in table.items():
+        cls = classify_group(entries, pattern, var_kinds)
+        if cls is None:
+            continue
+        strength, display, ok = cls
+        candidates.append((strength, len(ok),
+                           len(pattern.replace("*", "")), display,
+                           pattern, var_kinds, ok))
+
+    result, used = [], set()
+    for strength, cnt, fixed_len, display, pattern, var_kinds, entries in sorted(
+            candidates, key=lambda c: (-c[0], -c[1], c[2])):
+        new_entries = [e for e in entries if e[0] not in used]
+        if len(new_entries) < MIN_GROUP_SIZE:
+            continue
+        if strength < 2 and not verify_glob(pattern, [e[0] for e in new_entries]):
+            continue
+        members = sort_pattern_members(new_entries, var_kinds, strength)
+        result.append((strength, display, members))
+        used.update(members)
     return result
 
 
@@ -388,9 +501,10 @@ def build_groups():
         groups.append(("字母序列组", None, g))
         used.update(g)
 
-    wildcards = find_wildcard_groups([f for f in folders if f not in used])
-    for pattern, members in wildcards:
-        groups.append(("通配符模式组", pattern, members))
+    wildcards = find_pattern_groups([f for f in folders if f not in used])
+    for strength, display, members in wildcards:
+        gtype = {3: "对称模式组", 2: "有序模式组"}.get(strength, "通配符模式组")
+        groups.append((gtype, display, members))
         used.update(members)
 
     transfer_folders = [f for f in folders if f not in used]
@@ -419,7 +533,7 @@ def format_members(names, limit=5):
 def show_groups(groups, selected=None):
     """展示靶文件夹组表格（编号/组别/形式/文件夹/数目）；
     selected 为编号集合时只展示选中的组，标题改为"靶目标文件夹组"。"""
-    rows = [(str(i), gtype, f'"{pattern}"' if pattern else "—",
+    rows = [(str(i), gtype, pattern if pattern else "—",
              format_members(members), str(len(members)))
             for i, (gtype, pattern, members) in enumerate(groups, 1)
             if selected is None or i in selected]
