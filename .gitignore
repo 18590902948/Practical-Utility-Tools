@@ -23,3 +23,5 @@ atomsk/
 
 # 第三方源码目录（NepTrainKit-master 为外部项目源码，不纳入版本控制）
 NepTrainKit-master/
+Phase transition/
+AI_laboratory/
