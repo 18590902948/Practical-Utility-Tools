@@ -73,7 +73,7 @@ RETRY_TIMES = 3                           # 单个结构下载失败自动重试
 FORMAT = "vasp"                           # 输出格式: "vasp" / "cif"
 CELL_TYPE = "primitive"                   # "primitive" / "conventional"，原胞或惯用胞
 CIF_SYMPREC = 0.01                         # CIF 对称性检测精度（Å），None 则不分析对称性
-API_KEY = "Q1BIVhNaF1pwiU4NUwqscSV2uO4S1W8V"  # Materials Project API Key，分享脚本时请删除/替换为自己的
+API_KEY = ""  # Materials Project API Key，分享脚本时请删除/替换为自己的
 # ================================
 
 
