@@ -611,9 +611,10 @@ function New-Form {
     })
 
     # 清理模式控件：进度条占左侧两格、暂停/取消占右侧两格（默认隐藏）
+    $pbW = 2*$btnW + 8   # 先算成标量，避免 New-Object Size(表达式, ...) 的参数解析坑
     $script:progressBar = New-Object System.Windows.Forms.ProgressBar
     $progressBar.Location = New-Object System.Drawing.Point($btnX[0], 13)
-    $progressBar.Size = New-Object System.Drawing.Size(2*$btnW + 8, 22)
+    $progressBar.Size = New-Object System.Drawing.Size($pbW, 22)
     $progressBar.Minimum = 0; $progressBar.Maximum = 100; $progressBar.Value = 0
     $progressBar.Visible = $false
 
