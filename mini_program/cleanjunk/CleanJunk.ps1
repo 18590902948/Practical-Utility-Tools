@@ -54,20 +54,10 @@ function Get-ThumbCacheMB {
     if ($sum) { return [math]::Round($sum / 1MB, 1) } else { return 0 }
 }
 
-function Get-BrowserCacheMB {
-    param([string]$userDataBase)
-    $total = 0
-    foreach ($sub in @("$userDataBase\Default\Cache", "$userDataBase\Default\Code Cache")) {
-        $total += Get-DirSizeMB $sub
-    }
-    return [math]::Round($total, 1)
-}
-
 function Get-TargetSizeMB {
     param($t)
     if ($t.IsRecycle)   { return Get-RecycleBinMB }
     if ($t.IsThumb)     { return Get-ThumbCacheMB }
-    if ($t.IsBrowser)   { return Get-BrowserCacheMB $t.Paths[0] }
     $total = 0
     foreach ($p in $t.Paths) { $total += Get-DirSizeMB $p }
     return [math]::Round($total, 1)
@@ -75,7 +65,24 @@ function Get-TargetSizeMB {
 
 # 自动扫描 AppData 下所有已安装软件的缓存子目录（缓存/日志/临时，最多下探 2 层）。
 # 不写死软件清单：以后新装的软件只要按标准方式放缓存，就会被自动检测到。
-$appScanExclude = @('Microsoft','Packages','assembly','Temp','Google','pip','npm-cache','Yarn','JetBrains','QoderCN','InstallShield Installation Information','WPFLauncher')
+$appScanExclude = @('Microsoft','Packages','assembly','Temp','Google','pip','npm-cache','Yarn','JetBrains','QoderCN','InstallShield Installation Information','WPFLauncher',
+    # 浏览器数据目录一律不扫：保护书签/收藏、登录信息、密码等用户数据
+    'Mozilla','BraveSoftware','Opera Software','Vivaldi','360Chrome','360SE','SogouExplorer','Maxthon3','CentBrowser','Chromium','Yandex','TorBrowser','Waterfox')
+
+# 判断路径是否位于浏览器数据目录下（书签/收藏、登录信息、密码所在的目录结构）。
+# 命中即视为浏览器数据，自动扫描一律跳过，确保绝不清理浏览器内容。
+function Test-BrowserDataPath {
+    param([string]$path)
+    $segContain = @('browser','firefox','vivaldi','sogou','maxthon','brave','opera','chromium','chrome','360se','mozilla','yandex','liebao')
+    foreach ($seg in ($path -split '\\')) {
+        $s = $seg.ToLower()
+        foreach ($p in $segContain) {
+            if ($s -match [regex]::Escape($p)) { return $true }
+        }
+        if ($s -in @('user data','profiles','bookmarks','login data')) { return $true }
+    }
+    return $false
+}
 
 function Scan-AppDataCaches {
     $grouped = @{}
@@ -86,7 +93,8 @@ function Scan-AppDataCaches {
             $cacheDirs = @(
                 Get-ChildItem $appDir.FullName -Directory -Recurse -Depth 2 -Force -ErrorAction SilentlyContinue |
                     Where-Object { $_.Name -match '^(Cached.*|.*Cache$|SharedClientCache|logs|temp|ShaderCache|DXCache|GLCache|Crashpad|cache2)$' } |
-                    Select-Object -ExpandProperty FullName
+                    Select-Object -ExpandProperty FullName |
+                    Where-Object { -not (Test-BrowserDataPath $_) }
             )
             if ($cacheDirs.Count -eq 0) { continue }
             if (-not $grouped.ContainsKey($appDir.Name)) { $grouped[$appDir.Name] = @() }
@@ -126,8 +134,6 @@ $targets += @{ Name='CBS 更新日志';       Paths=@('C:\Windows\Logs\CBS');   
 $targets += @{ Name='pip 缓存';           Paths=@("$env:LOCALAPPDATA\pip");     Admin=$false; Level=$LVL_SAFE;     Desc='下载过的安装包缓存，下次自动重下';        Size=0 }
 $targets += @{ Name='npm 缓存';           Paths=@("$env:LOCALAPPDATA\npm-cache"); Admin=$false; Level=$LVL_SAFE;   Desc='npm 包缓存';                             Size=0 }
 $targets += @{ Name='yarn 缓存';          Paths=@("$env:LOCALAPPDATA\Yarn\Cache"); Admin=$false; Level=$LVL_SAFE;  Desc='yarn 包缓存';                            Size=0 }
-$targets += @{ Name='Chrome 缓存';        Paths=@("$env:LOCALAPPDATA\Google\Chrome\User Data"); Admin=$false; Level=$LVL_SAFE; Desc='只清 Cache，不动书签/历史/密码'; Size=0; IsBrowser=$true }
-$targets += @{ Name='Edge 缓存';          Paths=@("$env:LOCALAPPDATA\Microsoft\Edge\User Data"); Admin=$false; Level=$LVL_SAFE; Desc='只清 Cache，不动收藏/历史/密码'; Size=0; IsBrowser=$true }
 $targets += @{ Name='缩略图缓存';         Paths=@("$env:LOCALAPPDATA\Microsoft\Windows\Explorer"); Admin=$false; Level=$LVL_SAFE; Desc='缩略图，自动重建';                    Size=0; IsThumb=$true }
 $targets += @{ Name='错误报告 WER';       Paths=@("$env:LOCALAPPDATA\Microsoft\Windows\WER"); Admin=$false; Level=$LVL_SAFE; Desc='程序错误日志';                         Size=0 }
 $targets += @{ Name='应用商店缓存';       Paths=@("$env:LOCALAPPDATA\Packages\Microsoft.WindowsStore_8wekyb3d8bbwe\LocalCache"); Admin=$false; Level=$LVL_SAFE; Desc='Microsoft Store 缓存'; Size=0 }
@@ -144,7 +150,7 @@ $targets += @{ Name='QoderCN IDE 缓存';   Paths=@(
     "$env:APPDATA\QoderCN\logs"
 ); Admin=$false; Level=$LVL_RISKY; Desc='扩展需重新下载、索引重建，首次打开变慢'; Size=0 }
 
-# --- 软件缓存：自动扫描 AppData 下所有软件的缓存子目录（不碰聊天记录/下载文件/账号配置等用户数据） ---
+# --- 软件缓存：自动扫描 AppData 下所有软件的缓存子目录（不碰浏览器数据/聊天记录/下载文件/账号配置等用户数据） ---
 $targets += Scan-AppDataCaches
 # 已下载的安装程序残留不属于某软件缓存，单独保留为已知安全项
 $targets += @{ Name='安装器残留'; Paths=@("$env:LOCALAPPDATA\Downloaded Installations"); Admin=$false; Level=$LVL_SAFE; Desc='已下载的安装程序残留'; Size=0 }
@@ -172,12 +178,6 @@ function Invoke-Clean {
         Get-ChildItem $p -Force -File -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -like 'thumbcache_*.db' -or $_.Name -like 'iconcache_*.db' } |
             Remove-Item -Force -ErrorAction SilentlyContinue
-    }
-    elseif ($t.IsBrowser) {
-        $base = $t.Paths[0]
-        foreach ($sub in @("$base\Default\Cache", "$base\Default\Code Cache")) {
-            Get-ChildItem $sub -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-        }
     }
     else {
         foreach ($p in $t.Paths) {
