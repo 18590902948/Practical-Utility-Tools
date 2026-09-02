@@ -4,10 +4,16 @@
 脚本:        xyzs2xyz_file.py
 分类:        结构处理工具
 功能:        合并 xyz/extxyz 文件为单一文件：按配置区 INPUT_FILES 或命令行
-             指定输入（支持通配符），按格式分组合并，支持跨路径输入与
-             -o 指定输出文件，并统计帧数、记录合并日志。
-使用方法:    python xyzs2xyz_file.py [输入文件 ...] [-o 输出文件]
-参数:        输入文件 ...   待合并的 xyz/extxyz 文件 (可选 -t/--target 标记，
+             指定输入（支持通配符），支持 all 全自动模式（自动检测脚本
+             所在目录所有 xyz/extxyz 结构），按格式分组合并，支持跨路径
+             输入与 -o 指定输出文件，并统计帧数、记录合并日志。
+使用方法:    python xyzs2xyz_file.py [all/-all/--all | 输入文件 ...] [-o 输出文件]
+参数:        all            全自动模式: 自动检测脚本所在目录里的所有
+                            xyz/extxyz 结构文件并组合，忽略其它输入参数；
+                            输出遵循 -o 规则 (不指定时输出到默认目录
+                            OUTPUT_PATH 下的 OUTPUT_FILES)；-all/--all
+                            与 all 等价 (三种写法均可)
+            输入文件 ...   待合并的 xyz/extxyz 文件 (可选 -t/--target 标记，
                            不输入也行；命令行相对当前运行目录解析；不传时
                            用配置区 INPUT_FILES，支持通配符；配置区为空
                            则自动扫描脚本目录)
@@ -29,12 +35,15 @@
            位于输出目录
 示例:
   python xyzs2xyz_file.py
+  python xyzs2xyz_file.py all
+  python xyzs2xyz_file.py -all
+  python xyzs2xyz_file.py --all -o ./文件夹名/A.xyz
   python xyzs2xyz_file.py ./a.xyz ./b.xyz
   python xyzs2xyz_file.py -t ./a.xyz ./b.xyz -o ./C/c.xyz
   python xyzs2xyz_file.py './A/*.xyz' -o ./C/c.xyz
   python xyzs2xyz_file.py ./A/a.xyz ./B/b.xyz -o ./C/c.xyz
 作者:        隼蝶.
-最后修改:    2026-08-24
+最后修改:    2026-09-01
 =============================================================================
 """
 
@@ -68,9 +77,11 @@ def print_usage():
 
 def parse_args(argv):
     """解析命令行参数: -h/--help、-o/--output、-t/--target 为选项，其余为
-    输入文件列表。返回 (输入文件列表, 输出文件路径)。选项位置随意。"""
+    输入文件列表；位置参数 all 触发全自动模式。返回 (输入文件列表, 输出
+    文件路径, all 模式标记)。选项位置随意。"""
     files = []
     out_file = None
+    all_mode = False
     i = 0
     while i < len(argv):
         arg = argv[i]
@@ -86,10 +97,15 @@ def parse_args(argv):
                 sys.exit(1)
             out_file = argv[i + 1]
             i += 2
+        elif arg in ("all", "-all", "--all"):
+            # all 全自动模式: 自动检测脚本所在目录所有 xyz/extxyz 文件并组合
+            # (all 位置参数与 -all/--all 选项形式等价)
+            all_mode = True
+            i += 1
         else:
             files.append(arg)
             i += 1
-    return files, out_file
+    return files, out_file, all_mode
 
 
 def resolve_cmd_path(p, script_dir):
@@ -165,12 +181,20 @@ def count_frames(path):
     return n
 
 
-def resolve_files(script_dir, args, input_base, input_patterns, output_names):
+def resolve_files(script_dir, args, input_base, input_patterns, output_names,
+                  all_mode=False):
     """解析待合并的文件列表，返回按合并顺序排列的文件路径。
+    all 模式强制自动检测脚本目录 (忽略其它输入参数与配置区 INPUT_FILES)；
     命令行参数优先 (相对当前运行目录解析，不存在再相对脚本目录)；
     无参数时用配置区 INPUT_FILES 展开 (相对 INPUT_PATH)；配置区为空时
     自动扫描脚本目录。配置区/扫描来源的输出文件自动排除，避免重复合并
     (命令行显式指定的输入不排除)。"""
+    if all_mode:
+        # all 模式: 忽略其它位置参数，强制扫描脚本所在目录所有 xyz/extxyz
+        if args:
+            print(f"ℹ️ all 模式下忽略其它输入参数: {' '.join(args)}")
+        xyz_files, extxyz_files = collect_files(script_dir, output_names)
+        return xyz_files + extxyz_files
     if args:
         files = []
         for a in args:
@@ -257,8 +281,10 @@ def print_summary(n_input, outputs, record_path):
 # ============================== 脚本工作区 =====================================
 def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    args, out_file = parse_args(sys.argv[1:])
+    args, out_file, all_mode = parse_args(sys.argv[1:])
     print(f"ℹ️ 脚本所在目录: {script_dir}")
+    if all_mode:
+        print("ℹ️ all 全自动模式: 自动检测脚本所在目录所有 xyz/extxyz 文件")
 
     # 输出文件: -o 命令行优先，否则配置区 OUTPUT_FILES (相对 OUTPUT_PATH)
     outputs_by_fmt = {}  # 格式 -> 输出文件路径
@@ -295,7 +321,7 @@ def main():
     input_base = os.path.normpath(os.path.join(script_dir, INPUT_PATH))
     files = resolve_files(
         script_dir, args, input_base, INPUT_FILES,
-        {os.path.basename(f) for f in outputs_by_fmt.values()})
+        {os.path.basename(f) for f in outputs_by_fmt.values()}, all_mode)
     if not files:
         print("❌ 错误: 未找到任何 xyz/extxyz 文件。")
         sys.exit(1)

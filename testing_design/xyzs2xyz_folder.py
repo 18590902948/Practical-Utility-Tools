@@ -5,11 +5,17 @@
 分类:        结构处理工具
 功能:        合并多个文件夹中的 xyz/extxyz 文件：不传参数时自动检测脚本
              所在目录下的所有子文件夹 (按文件夹名排序合并)，传参数时按
-             命令行参数指定的文件夹顺序合并 (支持通配符)；可用 -n 指定
+             命令行参数指定的文件夹顺序合并 (支持通配符)；支持 all 全自动
+             模式 (自动检测脚本所在目录下所有子文件夹)，可用 -n 指定
              只合并某名称的 xyz/extxyz 文件，按格式分组合并，支持 -o
              指定输出路径，并统计帧数、记录合并日志。
-使用方法:    python xyzs2xyz_folder.py [文件夹 ...] [-n 文件名] [-o 输出路径]
-参数:        目标文件夹 ...  待合并的文件夹 (可选 -t/--target 标记，不输入
+使用方法:    python xyzs2xyz_folder.py [all/-all/--all | 文件夹 ...] [-n 文件名] [-o 输出路径]
+参数:        all            全自动模式: 自动检测脚本所在目录下的所有子
+                            文件夹并组合其中的 xyz/extxyz 结构文件，忽略
+                            其它位置参数；输出遵循 -o 规则 (不指定时输出
+                            到默认目录 OUTPUT_PATH 下的 OUTPUT_FILES)；
+                            -all/--all 与 all 等价 (三种写法均可)
+            目标文件夹 ...  待合并的文件夹 (可选 -t/--target 标记，不输入
                            也行；命令行相对当前运行目录解析，不存在再相对
                            脚本目录；支持通配符；不传时自动扫描脚本目录
                            下的所有子文件夹，按文件夹名排序，排除输出目录)
@@ -34,13 +40,16 @@
            位于输出目录
 示例:
   python xyzs2xyz_folder.py
+  python xyzs2xyz_folder.py all
+  python xyzs2xyz_folder.py -all
+  python xyzs2xyz_folder.py --all -o ./文件夹名/A.xyz
   python xyzs2xyz_folder.py ./文件夹1 ./文件夹2 ./文件夹3
   python xyzs2xyz_folder.py -n a.xyz ./A ./B ./C -o ./D/E/f.xyz
   python xyzs2xyz_folder.py -t ./A ./B ./C -n a.xyz -o ./D/E/f.xyz
   python xyzs2xyz_folder.py './1_md*' -o ./D/E/f.xyz
   python xyzs2xyz_folder.py ./A ./B -o ./C/c.xyz
 作者:        隼蝶.
-最后修改:    2026-08-24
+最后修改:    2026-09-01
 =============================================================================
 """
 
@@ -74,11 +83,12 @@ def print_usage():
 
 def parse_args(argv):
     """解析命令行参数: -h/--help、-o/--output、-n/--name、-t/--target 为
-    选项，其余为目标文件夹列表。返回 (目标文件夹列表, 输出路径, 文件名
-    模式列表)。选项位置随意。"""
+    选项，其余为目标文件夹列表；位置参数 all 触发全自动模式。返回 (目标
+    文件夹列表, 输出路径, 文件名模式列表, all 模式标记)。选项位置随意。"""
     folders = []
     out_path = None
     name_patterns = []
+    all_mode = False
     i = 0
     while i < len(argv):
         arg = argv[i]
@@ -100,10 +110,15 @@ def parse_args(argv):
                 sys.exit(1)
             name_patterns.append(argv[i + 1])
             i += 2
+        elif arg in ("all", "-all", "--all"):
+            # all 全自动模式: 自动检测脚本所在目录下所有子文件夹并合并其中
+            # 的 xyz/extxyz 文件 (all 位置参数与 -all/--all 选项形式等价)
+            all_mode = True
+            i += 1
         else:
             folders.append(arg)
             i += 1
-    return folders, out_path, name_patterns
+    return folders, out_path, name_patterns, all_mode
 
 
 def resolve_cmd_path(p, script_dir):
@@ -194,12 +209,16 @@ def count_frames(path):
     return n
 
 
-def resolve_folders(script_dir, args, output_dir, input_base):
+def resolve_folders(script_dir, args, output_dir, input_base, all_mode=False):
     """解析待合并的文件夹列表，返回按合并顺序排列的目录路径。
+    all 模式强制自动扫描 input_base 下所有子文件夹 (忽略其它位置参数)；
     无参数: 自动扫描 input_base 下所有子文件夹 (按文件夹名排序)，排除输出目录；
     有参数: 按参数顺序解析，支持通配符，参数为已存在目录则直接使用，否则
     相对脚本目录解析。"""
-    if not args:
+    if all_mode or not args:
+        # all 模式: 忽略其它位置参数，强制扫描脚本所在目录下所有子文件夹
+        if args:
+            print(f"ℹ️ all 模式下忽略其它位置参数: {' '.join(args)}")
         return [os.path.join(input_base, d)
                 for d in sorted(os.listdir(input_base))
                 if os.path.isdir(os.path.join(input_base, d))
@@ -282,8 +301,10 @@ def print_summary(n_folders, outputs, record_path):
 # ============================== 脚本工作区 =====================================
 def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    args, out_path, name_patterns = parse_args(sys.argv[1:])
+    args, out_path, name_patterns, all_mode = parse_args(sys.argv[1:])
     print(f"ℹ️ 脚本所在目录: {script_dir}")
+    if all_mode:
+        print("ℹ️ all 全自动模式: 自动检测脚本所在目录下所有子文件夹中的 xyz/extxyz 文件")
 
     # 输出文件: -o 命令行优先，否则配置区 OUTPUT_FILES (相对 OUTPUT_PATH)
     outputs_by_fmt = {}  # 格式 -> 输出文件路径
@@ -318,7 +339,7 @@ def main():
 
     # 解析待合并的文件夹 (无参数自动扫描子文件夹并排除输出目录，有参数按指定顺序)
     input_base = os.path.normpath(os.path.join(script_dir, INPUT_PATH))
-    folders = resolve_folders(script_dir, args, output_dir, input_base)
+    folders = resolve_folders(script_dir, args, output_dir, input_base, all_mode)
     if not folders:
         print("❌ 错误: 未找到任何文件夹。")
         sys.exit(1)
@@ -331,6 +352,11 @@ def main():
         xyz_files, extxyz_files = collect_files(folder, exclude_names, name_patterns)
         d = os.path.basename(os.path.normpath(folder))
         for f in xyz_files:
+            if "xyz" not in outputs_by_fmt:
+                # 无 .xyz 输出文件时跳过 (如 -o 只指定 .extxyz 输出文件)，
+                # 直接拼入会无处可写，跳过并警告
+                print(f"⚠️ 警告: 无 .xyz 格式的输出文件 (OUTPUT_FILES)，已跳过: {f}")
+                continue
             n = count_frames(f)
             if n == 0:
                 # 帧数为 0 说明不是有效的 xyz 文件 (如误传 txt/记录文件)，
@@ -340,6 +366,10 @@ def main():
             groups["xyz"].append(f)
             table.append((f, d, "xyz", n))
         for f in extxyz_files:
+            if "extxyz" not in outputs_by_fmt:
+                # 无 .extxyz 输出文件时跳过 (如 -o 只指定 .xyz 输出文件)
+                print(f"⚠️ 警告: 无 .extxyz 格式的输出文件 (OUTPUT_FILES)，已跳过: {f}")
+                continue
             n = count_frames(f)
             if n == 0:
                 print(f"⚠️ 警告: 文件不含有效 xyz 帧 (可能不是 xyz 文件)，已跳过: {f}")
