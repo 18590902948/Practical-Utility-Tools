@@ -11,6 +11,12 @@
 #              满员时指数退避轮询 (MIN_WAIT_SEC 起步，最长 MAX_WAIT_SEC)，
 #              等待时提示已提交进度 (最近提交的文件夹与作业 ID)，有空位
 #              立即快速补位。
+#              sbatch 返回失败 (配额/策略拒绝等) 时不占本轮名额、不推进序号，
+#              下一轮自动重试同一目录；同一目录连续失败 3 次才跳过并告警，
+#              末尾如有被跳过的目录则不生成完成标记。squeue 查询异常时按
+#              队列满员退避，防止误判空队列而超量提交被配额拒绝。每次提交
+#              失败都会在日志中显式标注 (⚠️ + 目录 + 第几次 + 原因) 并留痕，
+#              避免失败被静默吞掉难以追溯。
 #              自动后台运行：直接执行 ./3batch_submit.sh 等价于
 #              nohup ./3batch_submit.sh > submit.log 2>&1
 # 使用方法:    ./3batch_submit.sh
@@ -25,7 +31,7 @@
 #              .batch_submit.done，此后再次运行会被拒绝 (第二次、第三次...均
 #              退出)，如需重新提交先手动删除标记文件 (rm .batch_submit.done)
 # 作者:        隼蝶.
-# 最后修改日期: 2026-08-24
+# 最后修改日期: 2026-09-03
 # =============================================================================
 
 # ============ 配置区 (可按需调整) ============
@@ -169,6 +175,8 @@ first_batch=1   # 首次提交标记: 第一轮允许按 MAX_TOTAL_JOBS 全量�
 wait_seconds=$MIN_WAIT_SEC   # 当前轮询间隔 (秒)
 last_dir=""     # 最近一次成功提交的任务文件夹（满员等待时提示进度）
 last_jobid=""   # 最近一次成功提交的作业 ID
+fail_streak=0   # 同一目录连续提交失败次数 (满员等待轮不计入)
+skip_list=()    # 提交失败/文件不完整被跳过、待人工处理的目录
 
 while [ $index -lt $total ]; do
     echo
@@ -176,8 +184,15 @@ while [ $index -lt $total ]; do
     date
     echo "=================================================="
 
-    # 统计当前总任务数 (R+PD 全部算)
-    total_jobs=$(squeue -u $USER -h | wc -l)
+    # 统计当前总任务数 (R+PD 全部算)；squeue 与控制器偶发断连时输出报错但
+    # wc -l 会误计为 0 个任务，从而误判空队列超量提交，故查询异常时按满员退避
+    queue_raw=$(squeue -u "$USER" -h 2>&1)
+    if [ $? -ne 0 ] || echo "$queue_raw" | grep -qi error; then
+        echo "⚠️ squeue 查询异常，按队列满员处理，稍后自动重试"
+        total_jobs=$MAX_TOTAL_JOBS
+    else
+        total_jobs=$(printf '%s\n' "$queue_raw" | sed '/^[[:space:]]*$/d' | wc -l)
+    fi
     echo "当前总任务数：$total_jobs / $MAX_TOTAL_JOBS"
 
     # 队列满员: 指数退避等待，并提示已提交进度（上一轮最后提交的文件夹与作业 ID）
@@ -207,14 +222,16 @@ while [ $index -lt $total ]; do
 
     echo "本轮最多可提交：$can_submit"
     submitted=0
+    round_fail=0   # 本轮提交失败、待后续轮次重试的目录数
 
     while [ $submitted -lt $can_submit ] && [ $index -lt $total ]; do
         dir="${task_list[$index]}"
-        index=$((index + 1))
 
         # 提交前检测文件完整性，不完整则跳过
         if ! check_files "$dir"; then
             echo "⚠️ 跳过：${dir} 文件不完整（需要 INCAR、POSCAR、POTCAR、$JOB_SCRIPT，KPOINTS 可选）"
+            skip_list+=("$dir")
+            index=$((index + 1))
             continue
         fi
 
@@ -224,11 +241,27 @@ while [ $index -lt $total ]; do
         job_output=$(cd "$dir" && sbatch $JOB_SCRIPT 2>&1)
         echo "$job_output"
         jobid=$(echo "$job_output" | awk '/Submitted batch job/ {id=$NF} END {print id}')
-        if [ -n "$jobid" ]; then
-            last_dir="$dir"
-            last_jobid="$jobid"
+        if [ -z "$jobid" ]; then
+            # 提交失败 (配额/策略拒绝等)：不计名额、不推进序号，结束本轮后
+            # 下一轮重试同一目录；连续失败 3 次才跳过并告警 (原逻辑把失败
+            # 当作成功直接丢弃，导致 90 个目录被静默跳过)
+            fail_streak=$((fail_streak + 1))
+            if [ "$fail_streak" -ge 3 ]; then
+                echo "⚠️ 跳过：${dir} 连续 3 次提交失败，请检查该目录后重新运行本脚本补齐"
+                skip_list+=("$dir")
+                index=$((index + 1))
+                fail_streak=0
+                continue
+            fi
+            echo "⚠️ ${dir} 提交失败（第 ${fail_streak} 次），将在下一轮自动重试"
+            round_fail=$((round_fail + 1))
+            break
         fi
+        last_dir="$dir"
+        last_jobid="$jobid"
+        index=$((index + 1))
         submitted=$((submitted + 1))
+        fail_streak=0
         sleep 1
     done
 
@@ -237,9 +270,21 @@ while [ $index -lt $total ]; do
         first_batch=0
     fi
 
+    if [ "$round_fail" -gt 0 ]; then
+        echo "⚠️ 本轮 $round_fail 个目录提交失败，将在后续轮次自动重试"
+    fi
     echo "本轮提交：$submitted 个，等待 ${wait_seconds} 秒后再次检查..."
     sleep $wait_seconds
 done
+
+# 有目录被跳过时 (提交失败/文件不完整) 不创建完成标记，修复后可重跑补齐
+if [ "${#skip_list[@]}" -gt 0 ]; then
+    echo
+    echo "⚠️ 以下目录被跳过（${#skip_list[@]} 个），本次不创建完成标记："
+    printf '  %s\n' "${skip_list[@]}"
+    echo "ℹ️ 排查问题后可重新运行 ./3batch_submit.sh 自动补齐"
+    exit 0
+fi
 
 # 创建完成标记，禁止重复运行
 touch "$DONE_FILE"
