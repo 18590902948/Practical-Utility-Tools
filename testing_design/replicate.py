@@ -8,11 +8,16 @@
 支持输入:    xyz / extxyz（单帧或多帧）、.vasp / POSCAR / CONTCAR
 使用方法:    python replicate.py 输入文件 a b c [输出文件]      # 指定扩胞倍数
              python replicate.py 输入文件 目标原子数 [输出文件] # 自动搜索最近超胞
+             python replicate.py 输入文件 -c 200 [输出文件]     # 上限模式(仅 x/y 扩)
              python replicate.py 输入文件 -f 目标原子数        # 多帧 frame 模式
              python replicate.py 输入文件 目标原子数 -g        # 多帧 global 模式
              python replicate.py                                # 扫描脚本所在目录
                                                                  # 唯一结构文件并交互输入
 参数说明:    -f / -g 指定多帧扩胞模式（可放在任意位置）；不指定时多帧输入会交互询问
+             -c / --cap 指定上限模式（可放在任意位置，后跟上限原子数，默认 200）：
+             每帧按自身原子数仅在 x/y 方向独立选择尽量大的扩胞倍数（z 固定 1），
+             使扩胞后原子数不超过上限且尽量接近；任何扩胞都会超过上限的帧
+             （原帧已超上限或 2 倍即超）不扩胞、按原样输出，记录文件「说明」列标注原因
 输出:        所有输出默认放入输入文件所在目录的 replicate/ 子文件夹
              单帧输入 -> 输出文件 或 输入名_super.xyz
              多帧输入 frame 模式 -> frame0.xyz / frame1.xyz / frame2.xyz ...
@@ -22,10 +27,12 @@
              replicate/replicate.txt -> 每帧扩胞记录日志（多次运行追加）
 注意:        目标原子数模式对每一帧按自身原子数单独计算扩胞倍数；
              指定倍数模式所有帧共用同一倍数；
+             上限模式 (-c) 对每一帧按自身原子数独立选择 x/y 平面扩胞倍数，
+             并参考晶格 a/b 长度分配两方向倍数使超胞平面尺度尽量均衡；
              处理按 10 帧一批进行（分批打印/写日志/写文件，降低内存占用）；
              原子顺序保持输入顺序，不做重排。
 作者:        LINGMA
-修改日期:    2026-08-22
+修改日期:    2026-09-04
 =============================================================================
 """
 import os
@@ -52,6 +59,8 @@ DIFF_TOLERANCE = 2.0        # 目标原子数模式：候选偏差容忍倍率�
 MIN_DIFF_RATIO = 0.03       # 候选偏差保底下限：目标原子数的比例（默认 3%）
                             # 即使最小偏差为 0（完美匹配），也允许偏差 <= 目标*该值
                             # 的候选参与正方体评选，避免为了精确原子数选到扁盒子
+CAP_TARGET = 200           # 上限模式 (-c) 默认上限原子数（可被命令行覆盖）；
+                            # 每帧扩胞后原子数不得超过该值
 # ===========================================================================
 
 # 可自动识别为结构的文件名/扩展名（用于无参数自动扫描）
@@ -96,6 +105,33 @@ def find_nearest_supercell(atoms, target):
     best = feasible[0]
 
     return best[0], best[1], best[2]
+
+
+def find_xy_cap_supercell(atoms, cap):
+    """上限模式: 仅 x/y 方向扩胞（z 固定 1）。每帧按自身原子数独立选择
+    平面扩胞倍数 (nx, ny)：nx*ny 取不超过 cap/原子数 的最大整数，使输出
+    原子数尽量接近但不超过上限；若有多个因子组合，按晶格 a/b 长度分配
+    两方向倍数，使扩胞后平面两维尺度尽量均衡（避免单方向过度拉长）。
+    任何扩胞都会超过上限的帧（原帧原子数已 ≥ cap，或 2 倍即超）不扩胞、
+    原样输出。返回 (a, b, c, 说明)。"""
+    n = len(atoms)
+    if n >= cap:
+        return 1, 1, 1, f"不扩: 原 {n} 原子 ≥ 上限 {cap}"
+    k = cap // n
+    if k <= 1:
+        return 1, 1, 1, f"不扩: 2×{n} = {2 * n} > 上限 {cap}"
+    lengths = atoms.cell.lengths()
+    ax, ay = lengths[0], lengths[1]
+    best = None                   # (平面尺度均衡分, nx, ny)
+    for nx in range(1, k + 1):
+        if k % nx:
+            continue
+        ny = k // nx
+        score = abs(math.log((ax * nx) / (ay * ny)))  # 越接近 0 越均衡
+        if best is None or score < best[0]:
+            best = (score, nx, ny)
+    _, nx, ny = best
+    return nx, ny, 1, ""
 
 
 def read_frames(infile):
@@ -176,14 +212,31 @@ def print_structure_info(frames, infile):
 def main():
     # 提取模式参数 -f/-g（可出现在任意位置），其余参数按原逻辑解析
     mode_arg = None
+    cap_target = None
     args = []
-    for a in sys.argv[1:]:
+    i = 1                     # 从 1 开始: sys.argv[0] 为脚本自身路径
+    while i < len(sys.argv):
+        a = sys.argv[i]
         if a in ("-f", "--frame"):
             mode_arg = "frame"
         elif a in ("-g", "--global"):
             mode_arg = "global"
+        elif a in ("-c", "--cap"):
+            if i + 1 >= len(sys.argv):
+                print("错误: 选项 -c/--cap 需要一个正整数上限")
+                sys.exit(1)
+            try:
+                cap_target = int(sys.argv[i + 1])
+            except ValueError:
+                print(f"错误: -c/--cap 需要正整数上限，收到: {sys.argv[i + 1]}")
+                sys.exit(1)
+            i += 1
         else:
             args.append(a)
+        i += 1
+    if cap_target is not None and cap_target <= 0:
+        print("错误: -c/--cap 上限必须为正整数")
+        sys.exit(1)
     script_dir = os.path.dirname(os.path.abspath(__file__))
 
     # ---------- 参数解析 ----------
@@ -194,7 +247,17 @@ def main():
         except ValueError:
             return False
 
-    if not args:
+    if cap_target is not None:
+        # 上限模式: 输入文件 [输出文件]
+        if len(args) not in (1, 2):
+            print("使用方法:")
+            print("  python replicate.py 输入文件 -c 上限原子数 [-g/-f] [输出文件]")
+            sys.exit(1)
+        in_file = args[0]
+        a = b = c = None
+        target_num = None
+        out_file = args[1] if len(args) == 2 else None
+    elif not args:
         # 无参数：扫描脚本目录唯一结构文件，交互输入扩胞参数
         candidates = []
         for name in sorted(os.listdir(script_dir)):
@@ -260,10 +323,15 @@ def main():
         check_periodic(f)
 
     # ---------- 计算扩胞倍数 ----------
+    if cap_target is not None:
+        print(f"  上限模式: 仅 x/y 方向扩胞（z 固定 1），每帧按自身原子数尽量扩到"
+              f"不超过 {cap_target} 原子；")
+        print("            任何扩胞都会超过上限的帧不扩胞、原样输出"
+              "（记录「说明」列标注原因）")
     n0 = len(frames[0])
     if target_num is not None:
         a, b, c = find_nearest_supercell(frames[0], target_num)
-    else:
+    elif a is not None:
         if any(x <= 0 for x in (a, b, c)):
             print("错误: a b c 必须为正整数")
             sys.exit(1)
@@ -303,7 +371,8 @@ def main():
     print(f"  {'帧扩胞模式':<24}{mode_display:>44}")
     print("帧扩胞明细")
     header = (f"{'帧号':>6}{'输入原子数':>16}{'扩胞向量':>14}"
-              f"{'扩胞倍数':>12}{'输出原子数':>14}{'输出文件':>34}")
+              f"{'扩胞倍数':>12}{'输出原子数':>14}{'输出文件':>34}"
+              + (f"{'说明':>24}" if cap_target is not None else ""))
     print(header)
 
     # 日志先写头部（时间/输入/概要/表头），数据行随批次追加
@@ -323,10 +392,13 @@ def main():
 
     batch_lines = []                      # 攒够一批的行（终端打印 + 写日志）
     batch_atoms = []                      # 全局模式: 攒够一批的结构
+    fnote = ""                            # 上限模式: 不扩帧的原因说明（其他模式留空）
     for i, f in enumerate(frames, 1):
         # 目标原子数模式: 每一帧按自身原子数单独计算最接近的超胞倍数
         if target_num is not None:
             fa, fb, fc = find_nearest_supercell(f, target_num)
+        elif cap_target is not None:
+            fa, fb, fc, fnote = find_xy_cap_supercell(f, cap_target)
         else:
             fa, fb, fc = a, b, c
         new = clean_to_basic(make_supercell(f, np.diag([fa, fb, fc])))
@@ -341,7 +413,8 @@ def main():
                 write(out_names[0], batch_atoms, format="extxyz", append=True)
                 batch_atoms = []
         line = (f"{i:>6}{len(f):>16}{f'{fa}*{fb}*{fc}':>14}{fa * fb * fc:>12}"
-                f"{len(new):>14}{out_name:>34}")
+                f"{len(new):>14}{out_name:>34}"
+                + (f"{fnote:>24}" if cap_target is not None else ""))
         batch_lines.append(line)
         # 攒够一批（或最后一批）时统一终端打印 + 追加日志
         if len(batch_lines) == BATCH_SIZE or i == len(frames):
