@@ -9,7 +9,7 @@ ISMEAR    = 0
 SIGMA     = 0.05
 
 EDIFF     = 1E-5
-NELM       = 80
+NELM       = 150
 
 NSW        = 0
 IBRION     = -1
