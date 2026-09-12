@@ -1,9 +1,10 @@
 """
 脚本:        2gen_potcar_number.py
 功能:        对脚本所在目录下所有数字文件夹：
-             1) 在各文件夹直接生成默认 INCAR 与任务提交脚本 sub2.sh
-                （模板见配置区，已有则覆盖；LF 换行、UTF-8 无 BOM，
-                sub2.sh 补可执行位，保证 Linux 下可直接使用）；
+             1) 在各文件夹直接生成默认 INCAR 与任务提交脚本 sub_<编号>.sh
+                （如 1/sub_1.sh、52/sub_52.sh；模板中的 {name} 替换为所在
+                文件夹编号，同时用作 Slurm 作业名；已有则覆盖；LF 换行、
+                UTF-8 无 BOM，提交脚本补可执行位，保证 Linux 下可直接使用）；
              2) 按 POSCAR 第 6 行元素顺序分组，每组用 vaspkit -task 103 生成一次
                 POTCAR 并复制到组内其余文件夹（生成前统一删除旧 POTCAR，
                 失败/中断只会留下"缺失"，不会留下元素错配的旧文件）；
@@ -67,9 +68,11 @@ SYMPREC    = 1e-3
 NCORE = 2
 """
 
-# 默认任务提交脚本模板（sub2.sh）：直接写入各数字文件夹（已有则覆盖），如需自定义请修改此模板。
-# 注意：写入时强制 LF 换行（\n）、UTF-8 无 BOM 编码，符合 Linux 作业提交格式要求。
+# 默认任务提交脚本模板：写入各数字文件夹并命名为 sub_<编号>.sh（已有则覆盖），如需自定义请修改此模板。
+# 注意 1：模板中的 {name} 会替换为所在文件夹编号（如 1/sub_1.sh 的 Slurm 作业名为 1），其余内容原样写入。
+# 注意 2：写入时强制 LF 换行（\n）、UTF-8 无 BOM 编码，符合 Linux 作业提交格式要求。
 DEFAULT_SUB_SH = """#!/bin/bash
+#SBATCH --job-name={name}
 #SBATCH --partition=v6_384  
 #SBATCH --nodes=1        
 #SBATCH --ntasks=24        
@@ -203,15 +206,26 @@ def main():
         print(f"   {i:<4}  {' '.join(key):<14} {scope:<20} {len(members):<6} {members[0]}/")
 
     target = list(elements_of)
-    print(f"即将执行：生成 INCAR、sub2.sh → 清空旧 POTCAR → "
+    print(f"即将执行：生成 INCAR、sub_<编号>.sh → 清空旧 POTCAR → "
           f"按 {len(group_items)} 组生成 POTCAR → 全量校验")
 
-    # ---------- [1/3] 生成 INCAR 与 sub2.sh ----------
+    # ---------- [1/3] 生成 INCAR 与 sub_<编号>.sh ----------
     # 写入强制 LF 换行（newline="\n"）、UTF-8 无 BOM，保证 Linux 下可直接使用
     created = 0
     overwritten = 0
+    removed_old = []        # 清理掉的旧提交脚本 (文件夹, 文件名)
     for name in target:
-        for fname, content in (("INCAR", DEFAULT_INCAR), ("sub2.sh", DEFAULT_SUB_SH)):
+        sub_name = f"sub_{name}.sh"      # 提交脚本按文件夹编号命名：1/ → sub_1.sh，52/ → sub_52.sh
+        # 清理同目录遗留的旧提交脚本（如上一版 sub2.sh）：3batch_submit.sh 以
+        # sub*.sh 通配提交，目录内必须只保留一个匹配脚本，否则可能提交到旧脚本
+        for old in sorted(os.listdir(name)):
+            if (old != sub_name and old.startswith("sub") and old.endswith(".sh")
+                    and os.path.isfile(os.path.join(name, old))):
+                os.remove(os.path.join(name, old))
+                removed_old.append((name, old))
+        # 模板中的 {name} 替换为所在文件夹编号（Slurm 作业名等随之对齐）
+        sub_content = DEFAULT_SUB_SH.replace("{name}", name)
+        for fname, content in (("INCAR", DEFAULT_INCAR), (sub_name, sub_content)):
             fpath = os.path.join(name, fname)
             if os.path.exists(fpath):
                 overwritten += 1
@@ -220,9 +234,13 @@ def main():
             with open(fpath, "w", encoding="utf-8", newline="\n") as f:
                 f.write(content)
             if fname.endswith(".sh"):
-                # 补可执行位（sbatch 提交不要求，但方便手动 ./sub2.sh 提交）
+                # 补可执行位（sbatch 提交不要求，但方便手动 ./sub_<编号>.sh 提交）
                 os.chmod(fpath, 0o755)
-    print(f"📦 [1/3] 已写入 INCAR、sub2.sh → {len(target)} 个文件夹（新建 {created}，覆盖 {overwritten}）")
+    if removed_old:
+        print(f"🧹 已清理 {len(removed_old)} 个旧提交脚本（统一改名为 sub_<编号>.sh）：")
+        for name, old in removed_old:
+            print(f"   {name}/{old} → {name}/sub_{name}.sh")
+    print(f"📦 [1/3] 已写入 INCAR、sub_<编号>.sh → {len(target)} 个文件夹（新建 {created}，覆盖 {overwritten}）")
 
     # ---------- [2/3] 生成 POTCAR ----------
     # 先统一删除旧 POTCAR：任何失败/中断都不会留下元素错配的旧文件

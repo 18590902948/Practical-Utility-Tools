@@ -9,8 +9,8 @@
 #              (INCAR、POSCAR、POTCAR、提交脚本必需，KPOINTS 可选)，不完整
 #              则跳过；按 MAX_TOTAL_JOBS 与 BATCH_SIZE 控制提交速率，队列
 #              满员时指数退避轮询 (MIN_WAIT_SEC 起步，最长 MAX_WAIT_SEC)，
-#              等待时提示已提交进度 (最近提交的文件夹与作业 ID)，有空位
-#              立即快速补位。
+#              等待时提示已提交到的文件夹，有空位立即快速补位；每轮日志按
+#              [时间戳] → 【配额检查】/【提交作业】→ 明细行的统一格式输出。
 #              sbatch 返回失败 (配额/策略拒绝等) 时不占本轮名额、不推进序号，
 #              下一轮自动重试同一目录；同一目录连续失败 3 次才跳过并告警，
 #              末尾如有被跳过的目录则不生成完成标记。squeue 查询异常时按
@@ -25,22 +25,23 @@
 #              运行；在 Slurm 登录节点执行
 # 输出:
 #   submit.log            【批量脚本日志】3batch_submit.sh 自身运行日志，父目录仅生成一份
+#                         (每轮一个日志块：[时间戳] → 【配额检查】或【提交作业】→ 明细行)
 #   各任务子目录生成 %j.log 【子任务日志】由提交脚本的 --output=%j.log 生成
 # 防重复运行:  .batch_submit.lock 记录后台进程 PID，检测到已在运行直接拒绝
 #              (终端会提示查看/终止方式)；全部提交完成后生成完成标记
 #              .batch_submit.done，此后再次运行会被拒绝 (第二次、第三次...均
 #              退出)，如需重新提交先手动删除标记文件 (rm .batch_submit.done)
 # 作者:        隼蝶.
-# 最后修改日期: 2026-09-03
+# 最后修改日期: 2026-09-11
 # =============================================================================
 
 # ============ 配置区 (可按需调整) ============
 FOLDER_PATTERN="[0-9]*"  # 目标文件夹模式 (VASP: "[0-9]*"；GPUMD: "1_md*")
-JOB_SCRIPT="sub*.sh"     # 各文件夹内的作业提交脚本 (VASP: sub2.sh；GPUMD: sub_MD.sh)，目录内只能存在一个匹配脚本
+JOB_SCRIPT="sub*.sh"     # 各文件夹内的作业提交脚本 (VASP: sub_<编号>.sh；GPUMD: sub_MD.sh)，目录内只能存在一个匹配脚本
 BATCH_SIZE=9        # 每批最多提交数量
 MAX_TOTAL_JOBS=18   # 集群上允许的最大总任务数 (R+PD 全部算)
-MIN_WAIT_SEC=60     # 最短轮询间隔 (秒)：队列有空位时快速补位
-MAX_WAIT_SEC=120    # 最长轮询间隔 (秒)：满员时指数退避上限 (=2 分钟)
+MIN_WAIT_SEC=20     # 最短轮询间隔 (秒)：队列有空位时快速补位 (每 20 秒检查一次)
+MAX_WAIT_SEC=60     # 最长轮询间隔 (秒)：满员时指数退避上限 (=1 分钟)
 DONE_FILE=".batch_submit.done"  # 完成标记文件 (全部提交完成后创建)
 # ==============================================
 
@@ -53,8 +54,8 @@ DONE_FILE=".batch_submit.done"  # 完成标记文件 (全部提交完成后创�
 # # │   │   ├── POSCAR
 # # │   │   ├── POTCAR
 # # │   │   ├── KPOINTS           # 可选
-# # │   │   ├── sub2.sh
-# # │   │   └── ${JOBID}.log      # 【子任务日志】sub2.sh 中 --output=%j.log 生成
+# # │   │   ├── sub_<编号>.sh     # 提交脚本 (2gen_potcar_number.py 生成，如 1/sub_1.sh)
+# # │   │   └── ${JOBID}.log      # 【子任务日志】提交脚本中 --output=%j.log 生成
 # # │   ├── 2/
 # # │   │   └── ...
 # # │   └── ...
@@ -173,36 +174,31 @@ echo "无 log、待提交目录总数：$total"
 index=0
 first_batch=1   # 首次提交标记: 第一轮允许按 MAX_TOTAL_JOBS 全量提交
 wait_seconds=$MIN_WAIT_SEC   # 当前轮询间隔 (秒)
-last_dir=""     # 最近一次成功提交的任务文件夹（满员等待时提示进度）
-last_jobid=""   # 最近一次成功提交的作业 ID
+last_dir=""     # 最近一次成功提交的任务文件夹（满员等待时作为进度提示）
 fail_streak=0   # 同一目录连续提交失败次数 (满员等待轮不计入)
 skip_list=()    # 提交失败/文件不完整被跳过、待人工处理的目录
 
 while [ $index -lt $total ]; do
     echo
-    echo "=================================================="
-    date
-    echo "=================================================="
+    echo "[$(date '+%Y-%m-%d %H:%M:%S %Z')]"
 
     # 统计当前总任务数 (R+PD 全部算)；squeue 与控制器偶发断连时输出报错但
     # wc -l 会误计为 0 个任务，从而误判空队列超量提交，故查询异常时按满员退避
     queue_raw=$(squeue -u "$USER" -h 2>&1)
     if [ $? -ne 0 ] || echo "$queue_raw" | grep -qi error; then
-        echo "⚠️ squeue 查询异常，按队列满员处理，稍后自动重试"
+        echo "⚠️【配额检查】 squeue 查询异常，按队列满员处理，稍后自动重试"
         total_jobs=$MAX_TOTAL_JOBS
     else
         total_jobs=$(printf '%s\n' "$queue_raw" | sed '/^[[:space:]]*$/d' | wc -l)
     fi
-    echo "当前总任务数：$total_jobs / $MAX_TOTAL_JOBS"
 
     # 队列满员: 指数退避等待，并提示已提交进度（上一轮最后提交的文件夹与作业 ID）
     if [ "$total_jobs" -ge "$MAX_TOTAL_JOBS" ]; then
-        echo "任务已满"
+        echo "【配额检查】 当前任务:${total_jobs}/${MAX_TOTAL_JOBS}，队列已满"
         if [ -n "$last_dir" ]; then
-            echo "目前已提交到文件夹${last_dir}"
-            echo "作业ID：${last_jobid}"
+            echo "处理目录:${last_dir}"
         fi
-        echo "等待 ${wait_seconds} 秒后重试..."
+        echo "等待${wait_seconds}s后重试"
         sleep $wait_seconds
         wait_seconds=$((wait_seconds * 2))
         if [ "$wait_seconds" -gt "$MAX_WAIT_SEC" ]; then
@@ -220,48 +216,56 @@ while [ $index -lt $total ]; do
     # 队列有空位: 重置为最短间隔，及时抓住陆续出现的空位
     wait_seconds=$MIN_WAIT_SEC
 
-    echo "本轮最多可提交：$can_submit"
+    echo "【提交作业】 当前任务:${total_jobs}/${MAX_TOTAL_JOBS}，可用槽位${can_submit}"
     submitted=0
-    round_fail=0   # 本轮提交失败、待后续轮次重试的目录数
+    round_fail=0      # 本轮提交失败、待后续轮次重试的目录数
+    round_dirs=""     # 本轮成功提交的目录 (逗号分隔，日志汇总用)
+    round_jobids=""   # 本轮成功提交的作业 ID (逗号分隔，日志汇总用)
 
     while [ $submitted -lt $can_submit ] && [ $index -lt $total ]; do
         dir="${task_list[$index]}"
 
         # 提交前检测文件完整性，不完整则跳过
         if ! check_files "$dir"; then
-            echo "⚠️ 跳过：${dir} 文件不完整（需要 INCAR、POSCAR、POTCAR、$JOB_SCRIPT，KPOINTS 可选）"
+            echo "⚠️【跳过】 ${dir} 文件不完整（需要 INCAR、POSCAR、POTCAR、${JOB_SCRIPT}，KPOINTS 可选）"
             skip_list+=("$dir")
             index=$((index + 1))
             continue
         fi
 
-        echo "提交：$dir"
         # 捕获 sbatch 输出提取作业 ID（输出形如: Submitted batch job 35752356）
-        # JOB_SCRIPT 为通配符，不加引号以展开实际脚本名 (sub2.sh / sub_MD.sh)
+        # JOB_SCRIPT 为通配符，不加引号以展开实际脚本名 (sub_<编号>.sh / sub_MD.sh)
+        # 成功不打印原始输出（轮末汇总），失败则打印原始输出便于定位原因
         job_output=$(cd "$dir" && sbatch $JOB_SCRIPT 2>&1)
-        echo "$job_output"
         jobid=$(echo "$job_output" | awk '/Submitted batch job/ {id=$NF} END {print id}')
         if [ -z "$jobid" ]; then
             # 提交失败 (配额/策略拒绝等)：不计名额、不推进序号，结束本轮后
             # 下一轮重试同一目录；连续失败 3 次才跳过并告警 (原逻辑把失败
             # 当作成功直接丢弃，导致 90 个目录被静默跳过)
             fail_streak=$((fail_streak + 1))
+            echo "⚠️【提交失败】 ${dir}（第 ${fail_streak} 次，下一轮自动重试）"
+            echo "$job_output"
             if [ "$fail_streak" -ge 3 ]; then
-                echo "⚠️ 跳过：${dir} 连续 3 次提交失败，请检查该目录后重新运行本脚本补齐"
+                echo "⚠️【跳过】 ${dir} 已连续 ${fail_streak} 次提交失败，请检查该目录后重新运行本脚本补齐"
                 skip_list+=("$dir")
                 index=$((index + 1))
                 fail_streak=0
                 continue
             fi
-            echo "⚠️ ${dir} 提交失败（第 ${fail_streak} 次），将在下一轮自动重试"
             round_fail=$((round_fail + 1))
             break
         fi
         last_dir="$dir"
-        last_jobid="$jobid"
         index=$((index + 1))
         submitted=$((submitted + 1))
         fail_streak=0
+        if [ -z "$round_dirs" ]; then
+            round_dirs="$dir"
+            round_jobids="$jobid"
+        else
+            round_dirs="${round_dirs},${dir}"
+            round_jobids="${round_jobids},${jobid}"
+        fi
         sleep 1
     done
 
@@ -270,10 +274,17 @@ while [ $index -lt $total ]; do
         first_batch=0
     fi
 
-    if [ "$round_fail" -gt 0 ]; then
-        echo "⚠️ 本轮 $round_fail 个目录提交失败，将在后续轮次自动重试"
+    if [ "$submitted" -gt 0 ]; then
+        echo "本次提交${submitted}个任务"
+        echo "处理目录:${round_dirs}"
+        echo "JobID:${round_jobids}"
     fi
-    echo "本轮提交：$submitted 个，等待 ${wait_seconds} 秒后再次检查..."
+    if [ "$round_fail" -gt 0 ]; then
+        echo "⚠️【提交失败】 本轮 ${round_fail} 个目录未提交成功，下一轮自动重试"
+        echo "等待${wait_seconds}s后重试"
+    else
+        echo "等待${wait_seconds}s轮询"
+    fi
     sleep $wait_seconds
 done
 

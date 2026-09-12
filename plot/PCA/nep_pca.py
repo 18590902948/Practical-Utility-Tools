@@ -12,8 +12,10 @@ Output:     <脚本所在目录>/descriptor_pca.png（仅点图，无坐标轴�
             <脚本所在目录>/descriptor_pca.txt（PCA 投影坐标与方差占比）
 Example:    python nep_pca.py -x train.xyz -n nep_gen20000.txt
             python nep_pca.py -x "dump_*.xyz" -o pca_new.png
-Dependencies (建议 sketch 环境):
-            numpy  ase  matplotlib  scikit-learn  nep-adapters
+Dependencies (须 Python 3.14 / 建议 sketch 环境):
+            numpy  ase  matplotlib  scikit-learn
+            NEP 引擎 nep_adapters 1.0.2 已随脚本携带于同目录 nep_adapters/ 文件夹
+            （内含 cp314 编译引擎，锁 Python 3.14），无需 pip 安装
 =============================================================================
 """
 import argparse
@@ -277,8 +279,13 @@ def main(argv=None):
             print(f" Error: no NEP model auto-detected in {base_dir}; use -n to specify")
             sys.exit(1)
 
-    # 3. 加载模型（支持 nep3/nep4 及其 zbl/电荷等变体）
-    from nep_adapters import NEPCalculator, inspect_model
+    # 3. 加载模型（优先脚本同目录携带的 nep_adapters/，支持 nep3/nep4 及其 zbl/电荷等变体）
+    try:
+        from nep_adapters import NEPCalculator, inspect_model
+    except ImportError:
+        print(" Error: NEP engine not found; keep the bundled nep_adapters/ folder "
+              "next to this script (Python 3.14), or run: pip install nep-adapters")
+        sys.exit(1)
 
     print(f" NEP model: {nep_path}")
     calc = NEPCalculator(nep_path, backend="cpu")
