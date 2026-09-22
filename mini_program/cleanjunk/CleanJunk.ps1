@@ -251,9 +251,9 @@ $script:cleanHandle  = $null
 $script:cleaning     = $false
 
 function Start-Clean {
-    param($confirmed)
+    param($confirmed, $preNotes = @())
     $script:cleanState = [hashtable]::Synchronized(@{
-        Selected=$confirmed; Index=0; Count=$confirmed.Count; FreedTotal=0.0; Paused=$false; Cancel=$false; Done=$false; Results=@()
+        Selected=$confirmed; Index=0; Count=$confirmed.Count; FreedTotal=0.0; Paused=$false; Cancel=$false; Done=$false; Results=@($preNotes)
     })
     $script:cleaning = $true
     foreach ($t in $confirmed) { $t.CleanStatus = '等待中' }
@@ -354,7 +354,7 @@ function Start-Clean {
 
     # 切到清理模式界面
     $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
-    $btnAll.Visible = $false; $btnNone.Visible = $false; $btnClean.Visible = $false; $btnRefresh.Visible = $false
+    $script:btnAll.Visible = $false; $script:btnNone.Visible = $false; $script:btnClean.Visible = $false; $script:btnRefresh.Visible = $false
     $progressBar.Value = 0; $progressBar.Visible = $true
     $btnPause.Text = '暂停'; $btnPause.Visible = $true
     $btnCancel.Visible = $true
@@ -420,6 +420,10 @@ $script:form = $null
 $script:list = $null
 $script:topLabel = $null
 $script:selLabel = $null
+$script:btnAll = $null
+$script:btnNone = $null
+$script:btnClean = $null
+$script:btnRefresh = $null
 
 function Update-Top {
     $free = [math]::Round((Get-PSDrive C).Free / 1GB, 2)
@@ -509,11 +513,13 @@ function Do-Clean {
     if ($r -ne 'Yes') { return }
 
     # 二次确认放在后台启动前，由 UI 线程处理（避免后台线程弹窗）
+    # 跳过记录先暂存到 $preNotes：Start-Clean 会重置 Results，直接写会被冲掉
     $confirmed = @()
+    $preNotes = @()
     foreach ($t in $selected) {
         if ($t.Admin -and -not $isAdmin) {
             $t.CleanStatus = '已跳过(需管理员)'
-            $script:cleanState.Results += "$($t.Name): 需要管理员权限，已跳过"
+            $preNotes += "$($t.Name): 需要管理员权限，已跳过"
             continue
         }
         if ($t.NeedsSecondConfirm) {
@@ -522,7 +528,7 @@ function Do-Clean {
                 '二次确认', 'YesNo', 'Warning')
             if ($r2 -ne 'Yes') {
                 $t.CleanStatus = '已跳过(用户取消)'
-                $script:cleanState.Results += "$($t.Name): 用户取消，已跳过"
+                $preNotes += "$($t.Name): 用户取消，已跳过"
                 continue
             }
         }
@@ -534,7 +540,7 @@ function Do-Clean {
         return
     }
 
-    Start-Clean $confirmed
+    Start-Clean $confirmed $preNotes
 }
 
 function New-Form {
@@ -581,29 +587,31 @@ function New-Form {
     # 四个槽位的 x 坐标（左→右）：320, 424, 528, 632
     $btnX = @(320, 424, 528, 632)
 
-    $btnAll = New-Object System.Windows.Forms.Button
-    $btnAll.Text = '全选'
-    $btnAll.Size = New-Object System.Drawing.Size($btnW, $btnH)
-    $btnAll.Location = New-Object System.Drawing.Point($btnX[0], 9)
-    $btnAll.Add_Click({ foreach ($i in $list.Items) { $i.Checked = $true }; Update-SelLabel })
+    # 这4个按钮必须挂在 $script: 作用域：Start-Clean 与清理定时器要在函数/事件中
+    # 访问它们切换显示，若用函数局部变量，New-Form 返回后取到 $null，设置 .Visible 会报错
+    $script:btnAll = New-Object System.Windows.Forms.Button
+    $script:btnAll.Text = '全选'
+    $script:btnAll.Size = New-Object System.Drawing.Size($btnW, $btnH)
+    $script:btnAll.Location = New-Object System.Drawing.Point($btnX[0], 9)
+    $script:btnAll.Add_Click({ foreach ($i in $list.Items) { $i.Checked = $true }; Update-SelLabel })
 
-    $btnNone = New-Object System.Windows.Forms.Button
-    $btnNone.Text = '全不选'
-    $btnNone.Size = New-Object System.Drawing.Size($btnW, $btnH)
-    $btnNone.Location = New-Object System.Drawing.Point($btnX[1], 9)
-    $btnNone.Add_Click({ foreach ($i in $list.Items) { $i.Checked = $false }; Update-SelLabel })
+    $script:btnNone = New-Object System.Windows.Forms.Button
+    $script:btnNone.Text = '全不选'
+    $script:btnNone.Size = New-Object System.Drawing.Size($btnW, $btnH)
+    $script:btnNone.Location = New-Object System.Drawing.Point($btnX[1], 9)
+    $script:btnNone.Add_Click({ foreach ($i in $list.Items) { $i.Checked = $false }; Update-SelLabel })
 
-    $btnClean = New-Object System.Windows.Forms.Button
-    $btnClean.Text = '清理选中项'
-    $btnClean.Size = New-Object System.Drawing.Size($btnW, $btnH)
-    $btnClean.Location = New-Object System.Drawing.Point($btnX[2], 9)
-    $btnClean.Add_Click({ Do-Clean })
+    $script:btnClean = New-Object System.Windows.Forms.Button
+    $script:btnClean.Text = '清理选中项'
+    $script:btnClean.Size = New-Object System.Drawing.Size($btnW, $btnH)
+    $script:btnClean.Location = New-Object System.Drawing.Point($btnX[2], 9)
+    $script:btnClean.Add_Click({ Do-Clean })
 
-    $btnRefresh = New-Object System.Windows.Forms.Button
-    $btnRefresh.Text = '刷新列表'
-    $btnRefresh.Size = New-Object System.Drawing.Size($btnW, $btnH)
-    $btnRefresh.Location = New-Object System.Drawing.Point($btnX[3], 9)
-    $btnRefresh.Add_Click({
+    $script:btnRefresh = New-Object System.Windows.Forms.Button
+    $script:btnRefresh.Text = '刷新列表'
+    $script:btnRefresh.Size = New-Object System.Drawing.Size($btnW, $btnH)
+    $script:btnRefresh.Location = New-Object System.Drawing.Point($btnX[3], 9)
+    $script:btnRefresh.Add_Click({
         if ($script:scanning -or $script:cleaning) { return }
         $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
         Start-Scan
@@ -643,10 +651,10 @@ function New-Form {
     })
 
     $bottom.Controls.Add($selLabel)
-    $bottom.Controls.Add($btnAll)
-    $bottom.Controls.Add($btnNone)
-    $bottom.Controls.Add($btnClean)
-    $bottom.Controls.Add($btnRefresh)
+    $bottom.Controls.Add($script:btnAll)
+    $bottom.Controls.Add($script:btnNone)
+    $bottom.Controls.Add($script:btnClean)
+    $bottom.Controls.Add($script:btnRefresh)
     $bottom.Controls.Add($progressBar)
     $bottom.Controls.Add($btnPause)
     $bottom.Controls.Add($btnCancel)
@@ -703,7 +711,7 @@ $script:cleanTimer.Add_Tick({
         # 恢复编辑模式界面
         $progressBar.Visible = $false; $btnPause.Visible = $false; $btnCancel.Visible = $false
         $btnCancel.Enabled = $true
-        $btnAll.Visible = $true; $btnNone.Visible = $true; $btnClean.Visible = $true; $btnRefresh.Visible = $true
+        $script:btnAll.Visible = $true; $script:btnNone.Visible = $true; $script:btnClean.Visible = $true; $script:btnRefresh.Visible = $true
         $form.Cursor = [System.Windows.Forms.Cursors]::Default
         # 原地刷新大小与状态（不整表重建，避免"哗一下"）
         $list.BeginUpdate()
