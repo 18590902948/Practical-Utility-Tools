@@ -13,9 +13,13 @@ Purpose:    Visualize NEP prediction results with parity plots for energy,
 Usage:      gpumdkit.sh -plt prediction [save]
             python plt_prediction.py [save]
 Arguments:
-  save      Save the plot as 'prediction.png' instead of displaying it
+  save      Save the plot in several formats into plot_prediction/ instead of
+            displaying it
 Output:
-  prediction.png  (if save is used, or if backend is non-interactive)
+  plot_prediction/ folder next to this script (if save is used, or if backend
+  is non-interactive), containing:
+    prediction.svg (primary, editable text), prediction.pdf,
+    prediction.tiff (600 dpi), prediction.png (300 dpi preview)
 Author:     Zihan YAN (yanzihan@westlake.edu.cn)
 Last-modified: 2026-07-11
 =============================================================================
@@ -60,6 +64,24 @@ plt.rcParams['xtick.color'] = 'black'
 plt.rcParams['ytick.color'] = 'black'
 plt.rcParams['axes.labelcolor'] = 'black'
 plt.rcParams['text.color'] = 'black'
+
+# =========================
+# Publication-ready output
+# =========================
+OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'plot_prediction')
+
+def save_pub_py(fig, filename, dpi=600, png_dpi=300):
+    """Save the figure as SVG (primary, editable text), PDF, TIFF (dpi)
+    and a PNG preview (png_dpi) into the plot_prediction folder."""
+    os.makedirs(os.path.dirname(filename) or '.', exist_ok=True)
+    for fmt, fmt_dpi in [('svg', dpi), ('pdf', dpi), ('tiff', dpi), ('png', png_dpi)]:
+        path = f"{filename}.{fmt}"
+        try:
+            fig.savefig(path, dpi=fmt_dpi, bbox_inches='tight')
+            print(f"Saved: {path}")
+        except Exception as err:  # e.g. TIFF export needs Pillow
+            print(f"Warning: failed to save {path} ({err})")
+    plt.close(fig)
 
 # =========================
 # Load data - No longer loading loss.out
@@ -328,11 +350,11 @@ plt.tight_layout()
 plt.subplots_adjust(wspace=0.35)
 
 if len(sys.argv) > 1 and sys.argv[1] == 'save':
-    plt.savefig('prediction.png', dpi=300, bbox_inches='tight')
+    save_pub_py(fig, os.path.join(OUT_DIR, 'prediction'))
 else:
     from matplotlib import get_backend
     if get_backend().lower() in ['agg', 'cairo', 'pdf', 'ps', 'svg']:
-        print("Non-interactive backend detected. Plot saved as 'prediction.png'.")
-        plt.savefig('prediction.png', dpi=300, bbox_inches='tight')
+        print(f"Non-interactive backend detected. Plot saved into '{OUT_DIR}'.")
+        save_pub_py(fig, os.path.join(OUT_DIR, 'prediction'))
     else:
         plt.show()

@@ -13,9 +13,13 @@ Purpose:    Visualize NEP training progress including loss curves, RMSE
 Usage:      gpumdkit.sh -plt train [save]
             python plt_train.py [save]
 Arguments:
-  save      Save the plot as 'train.png' instead of displaying it
+  save      Save the plot in several formats into plot_train/ instead of
+            displaying it
 Output:
-  train.png  (if save is used, or if backend is non-interactive)
+  plot_train/ folder next to this script (if save is used, or if backend is
+  non-interactive), containing:
+    train.svg (primary, editable text), train.pdf, train.tiff (600 dpi),
+    train.png (300 dpi preview)
 Author:     Zihan YAN (yanzihan@westlake.edu.cn)
 Last-modified: 2026-07-11
 =============================================================================
@@ -31,10 +35,10 @@ plt.rcParams.update({
     "font.sans-serif": ["Arial", "DejaVu Sans", "Liberation Sans"],
     "svg.fonttype": "none",
     "pdf.fonttype": 42,
-    "font.size": 12,
-    "axes.labelsize": 12,
-    "xtick.labelsize": 12,
-    "ytick.labelsize": 12,
+    "font.size": 14,
+    "axes.labelsize": 14,
+    "xtick.labelsize": 14,
+    "ytick.labelsize": 14,
     "legend.fontsize": 12,
     "axes.linewidth": 1.8,
     "xtick.direction": "out",
@@ -52,6 +56,22 @@ plt.rcParams.update({
 PASTEL = ['#8DA0CB', '#E9C87C', '#8BCF8B', '#DC8C86', '#A48FE0', '#D6AC72']
 plt.rcParams['axes.prop_cycle'] = plt.cycler(color=PASTEL)
 REF_COLOR = '#808080'      # neutral reference line
+
+# Publication-ready output folder, created next to this script
+OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'plot_train')
+
+def save_pub_py(fig, filename, dpi=600, png_dpi=300):
+    """Save the figure as SVG (primary, editable text), PDF, TIFF (dpi)
+    and a PNG preview (png_dpi) into the plot_train folder."""
+    os.makedirs(os.path.dirname(filename) or '.', exist_ok=True)
+    for fmt, fmt_dpi in [('svg', dpi), ('pdf', dpi), ('tiff', dpi), ('png', png_dpi)]:
+        path = f"{filename}.{fmt}"
+        try:
+            fig.savefig(path, dpi=fmt_dpi, bbox_inches='tight')
+            print(f"Saved: {path}")
+        except Exception as err:  # e.g. TIFF export needs Pillow
+            print(f"Warning: failed to save {path} ({err})")
+    plt.close(fig)
 
 # Load data
 loss = np.loadtxt('loss.out', comments='#')
@@ -138,9 +158,9 @@ else:
 
 # Plotting the loss figure
 axs[0, 0].loglog(loss[:, plot_cols], '-', linewidth=2.2)
-axs[0, 0].set_xlabel(xlabel, fontsize=12)
-axs[0, 0].set_ylabel('Loss functions', fontsize=12)
-axs[0, 0].tick_params(axis='both', labelsize=12)
+axs[0, 0].set_xlabel(xlabel, fontsize=14)
+axs[0, 0].set_ylabel('Loss functions', fontsize=14)
+axs[0, 0].tick_params(axis='both', labelsize=14)
 axs[0, 0].legend(legend_labels, prop={'size': 12}, loc='lower left')
 axs[0, 0].axis('tight')
 #axs[0, 0].text(-0.07, 1.03, "(a)", transform=axs[0, 0].transAxes, fontsize=12, va='top', ha='right')
@@ -149,11 +169,11 @@ axs[0, 0].axis('tight')
 xmin_energy, xmax_energy = calculate_limits(energy_data[:, 1])
 axs[0, 1].set_xlim(xmin_energy, xmax_energy)
 axs[0, 1].set_ylim(xmin_energy, xmax_energy)
-axs[0, 1].plot(energy_data[:, 1], energy_data[:, 0], '.', markersize=8)
+axs[0, 1].plot(energy_data[:, 1], energy_data[:, 0], '.', markersize=8, rasterized=True)
 axs[0, 1].plot([xmin_energy, xmax_energy], [xmin_energy, xmax_energy], linewidth=2.0, color=REF_COLOR, linestyle='--')
-axs[0, 1].set_xlabel('DFT energy (eV/atom)', fontsize=12)
-axs[0, 1].set_ylabel('NEP energy (eV/atom)', fontsize=12)
-axs[0, 1].tick_params(axis='both', labelsize=12)
+axs[0, 1].set_xlabel('DFT energy (eV/atom)', fontsize=14)
+axs[0, 1].set_ylabel('NEP energy (eV/atom)', fontsize=14)
+axs[0, 1].tick_params(axis='both', labelsize=14)
 axs[0, 1].legend(['energy'], loc='upper left')
 axs[0, 1].axis('tight')
 
@@ -169,11 +189,11 @@ axs[0, 1].text(0.7, 0.12, r'R$  ^2  $'+f': {energy_r2:.4f}\nMAE: {energy_mae:.2f
 xmin_force, xmax_force = calculate_limits(force_data[:, 3:6].reshape(-1))
 axs[1, 0].set_xlim(xmin_force, xmax_force)
 axs[1, 0].set_ylim(xmin_force, xmax_force)
-axs[1, 0].plot(force_data[:, 3:6], force_data[:, 0:3], '.', markersize=8)
+axs[1, 0].plot(force_data[:, 3:6], force_data[:, 0:3], '.', markersize=8, rasterized=True)
 axs[1, 0].plot([xmin_force, xmax_force], [xmin_force, xmax_force], linewidth=2.0, color=REF_COLOR, linestyle='--')
-axs[1, 0].set_xlabel(r'DFT force (eV/$  \mathrm{\AA}  $)', fontsize=12)
-axs[1, 0].set_ylabel(r'NEP force (eV/$  \mathrm{\AA}  $)', fontsize=12)
-axs[1, 0].tick_params(axis='both', labelsize=12)
+axs[1, 0].set_xlabel(r'DFT force (eV/$  \mathrm{\AA}  $)', fontsize=14)
+axs[1, 0].set_ylabel(r'NEP force (eV/$  \mathrm{\AA}  $)', fontsize=14)
+axs[1, 0].tick_params(axis='both', labelsize=14)
 axs[1, 0].legend(['fx', 'fy', 'fz'], loc='upper left')
 axs[1, 0].axis('tight')
 
@@ -200,11 +220,11 @@ else:
     xmin_tensor, xmax_tensor = calculate_limits(tensor_data[:, 6:12].reshape(-1))
     axs[1, 1].set_xlim(xmin_tensor, xmax_tensor)
     axs[1, 1].set_ylim(xmin_tensor, xmax_tensor)
-    axs[1, 1].plot(tensor_data[:, 6:12], tensor_data[:, 0:6], '.', markersize=8)
+    axs[1, 1].plot(tensor_data[:, 6:12], tensor_data[:, 0:6], '.', markersize=8, rasterized=True)
     axs[1, 1].plot([xmin_tensor, xmax_tensor], [xmin_tensor, xmax_tensor], linewidth=2.0, color=REF_COLOR, linestyle='--')
-    axs[1, 1].set_xlabel(f'DFT {tensor_name.lower()} ({tensor_axis_unit})', fontsize=12)
-    axs[1, 1].set_ylabel(f'NEP {tensor_name.lower()} ({tensor_axis_unit})', fontsize=12)
-    axs[1, 1].tick_params(axis='both', labelsize=12)
+    axs[1, 1].set_xlabel(f'DFT {tensor_name.lower()} ({tensor_axis_unit})', fontsize=14)
+    axs[1, 1].set_ylabel(f'NEP {tensor_name.lower()} ({tensor_axis_unit})', fontsize=14)
+    axs[1, 1].tick_params(axis='both', labelsize=14)
     axs[1, 1].legend(['xx', 'yy', 'zz', 'xy', 'yz', 'zx'], loc='upper left')
     axs[1, 1].axis('tight')
     # Calculate and display RMSE, MAE, and R² for stress/virial data
@@ -229,13 +249,13 @@ print_parity_metrics(
 plt.tight_layout()
 #fig.subplots_adjust(top=0.968,bottom=0.088,left=0.086,right=0.983,hspace=0.22,wspace=0.24)
 if len(sys.argv) > 1 and sys.argv[1] == 'save':
-    plt.savefig('train.png', dpi=300)
+    save_pub_py(fig, os.path.join(OUT_DIR, 'train'))
 else:
     # Check if the current backend is non-interactive
     from matplotlib import get_backend
     if get_backend().lower() in ['agg', 'cairo', 'pdf', 'ps', 'svg']:
         print("Unable to display the plot due to the non-interactive backend.")
-        print("The plot has been automatically saved as 'train.png'.")
-        plt.savefig('train.png', dpi=300)
+        print(f"The plot has been automatically saved into '{OUT_DIR}'.")
+        save_pub_py(fig, os.path.join(OUT_DIR, 'train'))
     else:
         plt.show()
